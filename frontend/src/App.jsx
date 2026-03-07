@@ -6,7 +6,7 @@ import TradeDecision    from './components/TradeDecision';
 import BacktestPanel    from './components/BacktestPanel';
 import './index.css';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'https://quant-agent-backend-pcmt.onrender.com';
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d'];
 
 function RLWeightsCard({ weights }) {

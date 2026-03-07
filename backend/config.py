@@ -88,6 +88,7 @@ API_PORT  = int(os.environ.get("PORT", 8000))   # Railway injects $PORT
 
 _vercel = os.environ.get("VERCEL_FRONTEND_URL", "")   # set this in Railway
 CORS_ORIGINS = [
+    "*",                           # allow all origins (safe for public read-only API)
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
