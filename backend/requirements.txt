@@ -8,7 +8,7 @@ pandas==2.2.1
 numpy==1.26.4
 
 # Technical indicators
-pandas-ta==0.3.14b0 
+# pandas-ta removed (incompatible with Python 3.12) 
 # Charts / Pattern detection
 mplfinance==0.12.10b0
 matplotlib==3.8.3
@@ -16,7 +16,7 @@ Pillow==10.3.0
 
 # ML / RL
 scikit-learn==1.4.1.post1
-scipy==1.12.0
+scipy>=1.13.0
 torch==2.2.2
 stable-baselines3==2.3.0
 gymnasium==0.29.1
