@@ -26,7 +26,6 @@ from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 
 from config import (
     MACD_FAST, MACD_SIGNAL, MACD_SLOW,
@@ -37,6 +36,55 @@ from utils.helpers import clamp, safe_float
 
 logger = logging.getLogger(__name__)
 
+
+# ── Pure-pandas indicator helpers (no pandas_ta needed) ──────────────────────
+
+def _rsi(close: pd.Series, length: int = 14) -> pd.Series:
+    """Wilder-style RSI."""
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1.0 / length, min_periods=length).mean()
+    avg_loss = loss.ewm(alpha=1.0 / length, min_periods=length).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def _macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """Returns (macd_line, signal_line, histogram) as pd.Series."""
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+
+def _stochastic(high: pd.Series, low: pd.Series, close: pd.Series,
+                k: int = 14, d: int = 3):
+    """Returns (%K, %D) as pd.Series."""
+    lowest_low = low.rolling(window=k).min()
+    highest_high = high.rolling(window=k).max()
+    stoch_k = 100.0 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
+    stoch_d = stoch_k.rolling(window=d).mean()
+    return stoch_k, stoch_d
+
+
+def _roc(close: pd.Series, length: int = 10) -> pd.Series:
+    """Rate of change (percentage)."""
+    prev = close.shift(length)
+    return 100.0 * (close - prev) / prev.replace(0, np.nan)
+
+
+def _williams_r(high: pd.Series, low: pd.Series, close: pd.Series,
+                length: int = 14) -> pd.Series:
+    """Williams %R (range -100 to 0)."""
+    highest_high = high.rolling(window=length).max()
+    lowest_low = low.rolling(window=length).min()
+    return -100.0 * (highest_high - close) / (highest_high - lowest_low).replace(0, np.nan)
+
+
+# ── Main entry point ─────────────────────────────────────────────────────────
 
 def run(df: pd.DataFrame) -> Dict[str, Any]:
     """
@@ -58,34 +106,29 @@ def run(df: pd.DataFrame) -> Dict[str, Any]:
     low   = df["Low"]
 
     # ── RSI ──────────────────────────────────────────────────────────────────
-    rsi_series = ta.rsi(close, length=RSI_PERIOD)
+    rsi_series = _rsi(close, length=RSI_PERIOD)
     rsi = safe_float(rsi_series.iloc[-1])
 
     # ── MACD ─────────────────────────────────────────────────────────────────
-    macd_df = ta.macd(close, fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL)
-    macd_col    = f"MACD_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}"
-    signal_col  = f"MACDs_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}"
-    hist_col    = f"MACDh_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}"
-
-    macd_val    = safe_float(macd_df[macd_col].iloc[-1])
-    macd_sig    = safe_float(macd_df[signal_col].iloc[-1])
-    macd_hist   = safe_float(macd_df[hist_col].iloc[-1])
-    prev_hist   = safe_float(macd_df[hist_col].iloc[-2])
+    macd_line, macd_sig_line, macd_hist_line = _macd(
+        close, fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL
+    )
+    macd_val    = safe_float(macd_line.iloc[-1])
+    macd_sig    = safe_float(macd_sig_line.iloc[-1])
+    macd_hist   = safe_float(macd_hist_line.iloc[-1])
+    prev_hist   = safe_float(macd_hist_line.iloc[-2])
 
     # ── Stochastic ────────────────────────────────────────────────────────────
-    stoch_df = ta.stoch(high, low, close, k=STOCH_K, d=STOCH_D)
-    stoch_k_col = f"STOCHk_{STOCH_K}_{STOCH_D}_3"
-    stoch_d_col = f"STOCHd_{STOCH_K}_{STOCH_D}_3"
-
-    stoch_k  = safe_float(stoch_df[stoch_k_col].iloc[-1])
-    stoch_d  = safe_float(stoch_df[stoch_d_col].iloc[-1])
+    stoch_k_series, stoch_d_series = _stochastic(high, low, close, k=STOCH_K, d=STOCH_D)
+    stoch_k  = safe_float(stoch_k_series.iloc[-1])
+    stoch_d  = safe_float(stoch_d_series.iloc[-1])
 
     # ── ROC ───────────────────────────────────────────────────────────────────
-    roc_series = ta.roc(close, length=ROC_PERIOD)
+    roc_series = _roc(close, length=ROC_PERIOD)
     roc = safe_float(roc_series.iloc[-1])
 
     # ── Williams %R ───────────────────────────────────────────────────────────
-    willr_series = ta.willr(high, low, close, length=WILLIAMS_PERIOD)
+    willr_series = _williams_r(high, low, close, length=WILLIAMS_PERIOD)
     willr = safe_float(willr_series.iloc[-1])
 
     # ── Score each indicator [-1, +1] ─────────────────────────────────────────
