@@ -8,7 +8,7 @@ pandas==2.2.1
 numpy==1.26.4
 
 # Technical indicators
-pandas-ta==0.4.71b0
+pandas-ta==0.3.14b0 
 # Charts / Pattern detection
 mplfinance==0.12.10b0
 matplotlib==3.8.3
