@@ -2,8 +2,8 @@ fastapi==0.110.0
 uvicorn[standard]==0.29.0
 pydantic==2.6.4
 
-# Data
-yfinance==0.2.38
+# Data (using Yahoo Finance v8 API directly via requests)
+requests>=2.31.0
 pandas==2.2.1
 numpy==1.26.4
 
