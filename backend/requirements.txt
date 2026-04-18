@@ -1,25 +1,47 @@
-fastapi==0.110.0
-uvicorn[standard]==0.29.0
-pydantic==2.6.4
+# QuantAgent v3.0 — Python Dependencies
+# Install: pip install -r requirements.txt
 
-# Data (using Yahoo Finance v8 API directly via requests)
+# ── Core API ──────────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+yfinance>=0.2.38
+pandas>=2.2.0
+numpy>=1.26.0
+pandas_datareader>=0.10.0
+fredapi>=0.5.2
 requests>=2.31.0
-pandas==2.2.1
-numpy==1.26.4
+cachetools>=5.3.0
 
-# Technical indicators
-# pandas-ta removed (incompatible with Python 3.12) 
-# Charts / Pattern detection
-mplfinance==0.12.10b0
-matplotlib==3.8.3
-Pillow==10.3.0
+# ── Sentiment + NLP ───────────────────────────────────────────────────────────
+newsapi-python>=0.2.7
+praw>=7.8.0
+transformers>=4.41.0
 
-# ML / RL
-scikit-learn==1.4.1.post1
+# ── Statistical Models ────────────────────────────────────────────────────────
+hmmlearn>=0.3.3
+arch>=8.0.0
+ruptures>=1.1.10
 scipy>=1.13.0
-torch==2.2.2
-stable-baselines3==2.3.0
-gymnasium==0.29.1
+statsmodels>=0.14.0
+scikit-learn>=1.4.0
 
-# Utilities
-python-dotenv==1.0.1
+# ── RL + Deep Learning ────────────────────────────────────────────────────────
+torch>=2.3.0
+stable-baselines3>=2.8.0
+sb3-contrib>=2.8.0
+gymnasium>=0.29.0
+
+# ── Gradient Boosting ─────────────────────────────────────────────────────────
+xgboost>=2.0.0
+
+# ── Optimization ─────────────────────────────────────────────────────────────
+scipy>=1.13.0   # duplicate OK — for portfolio CVaR optimization
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+joblib>=1.4.0
+tqdm>=4.66.0

@@ -4,10 +4,18 @@
  */
 export default function TradeDecision({ data }) {
   if (!data) return null;
-  const { decision, risk } = data;
-  if (!decision) return null;
+  const { trade_decision, rl_weights, current_price } = data;
+  if (!trade_decision) return null;
 
-  const { action, entry, stop_loss, take_profit, confidence, score, reasoning } = decision;
+  const action = trade_decision.adjusted_action > 0.05 ? "BUY" : (trade_decision.adjusted_action < -0.05 ? "SELL" : "HOLD");
+  const entry = current_price;
+  const stop_loss = trade_decision.stop_loss;
+  const take_profit = trade_decision.take_profit;
+  const score = trade_decision.adjusted_action;
+  
+  // Calculate confidence inversely proportional to disagreement
+  const confidence = rl_weights ? (1 - rl_weights.disagreement_score) : 0.5;
+  const reasoning = trade_decision.veto_reason ? `Veto: ${trade_decision.veto_reason}` : (trade_decision.approved ? "Self-Critique Engine approved trade parameters. CVaR well within limits." : "Trade sizing restricted due to conditional value at risk limits.");
 
   return (
     <div>
@@ -34,7 +42,7 @@ export default function TradeDecision({ data }) {
         </div>
 
         <div className="score-row">
-          <span className="score-label">Fusion Score</span>
+          <span className="score-label">RL Action Score</span>
           <span className="score-value" style={{ color: score > 0 ? '#00e5a0' : score < 0 ? '#ff4f72' : '#ffb830' }}>
             {score > 0 ? '+' : ''}{score?.toFixed(4)}
           </span>
@@ -45,15 +53,13 @@ export default function TradeDecision({ data }) {
         <div className="reasoning-text">{reasoning}</div>
 
         {/* Risk sizing summary */}
-        {risk && (
-          <div style={{ marginTop: 16 }}>
-            <div className="card-title" style={{ marginBottom: 10 }}>Position Sizing</div>
-            <div className="risk-stat"><span className="rs-label">Shares</span><span className="rs-value">{risk.shares}</span></div>
-            <div className="risk-stat"><span className="rs-label">Position Value</span><span className="rs-value">${risk.position_value?.toLocaleString()}</span></div>
-            <div className="risk-stat"><span className="rs-label">Portfolio %</span><span className="rs-value">{(risk.position_pct * 100)?.toFixed(2)}%</span></div>
-            <div className="risk-stat"><span className="rs-label">Kelly Fraction</span><span className="rs-value">{(risk.kelly_fraction * 100)?.toFixed(2)}%</span></div>
-          </div>
-        )}
+        <div style={{ marginTop: 16 }}>
+          <div className="card-title" style={{ marginBottom: 10 }}>Position Sizing</div>
+          <div className="risk-stat"><span className="rs-label">Adjusted Size</span><span className="rs-value">{trade_decision.final_size.toFixed(4)} shares</span></div>
+          <div className="risk-stat"><span className="rs-label">Sizing Cut</span><span className="rs-value" style={{ color: trade_decision.size_reduction_pct > 0 ? '#ff4f72' : '#00e5a0' }}>-{(trade_decision.size_reduction_pct * 100)?.toFixed(1)}%</span></div>
+          <div className="risk-stat"><span className="rs-label">Kelly Fraction</span><span className="rs-value">{(trade_decision.kelly_fraction * 100)?.toFixed(2)}%</span></div>
+          <div className="risk-stat"><span className="rs-label">CVaR (95%)</span><span className="rs-value">{(trade_decision.current_cvar * 100)?.toFixed(2)}%</span></div>
+        </div>
       </div>
     </div>
   );

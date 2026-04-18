@@ -1,0 +1,179 @@
+{
+  "cash": 97077.6300239563,
+  "positions": {
+    "AAPL": {
+      "quantity": 11.125,
+      "avg_price": 263.1319
+    }
+  },
+  "history": [
+    {
+      "id": "542aad0d",
+      "timestamp": "2026-04-15T16:53:07.720294Z",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "shares": 1.0,
+      "price": 264.4,
+      "trade_value": 264.4,
+      "realized_pnl": 0.0,
+      "notes": "",
+      "cash_after": 99735.6
+    }
+  ],
+  "trade_history": [
+    {
+      "trade_id": "542aad0d",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 264.4,
+      "value": 264.4,
+      "timestamp": "2026-04-15T16:53:07.720294Z",
+      "notes": ""
+    },
+    {
+      "trade_id": "674cf4fe",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 262.405,
+      "value": 262.4,
+      "timestamp": "2026-04-16T14:17:32.400394",
+      "notes": null
+    },
+    {
+      "trade_id": "75d57fec",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 8.0,
+      "price": 262.405,
+      "value": 2099.24,
+      "timestamp": "2026-04-16T14:18:30.255976",
+      "notes": null
+    },
+    {
+      "trade_id": "5780165d",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T04:38:14.161563",
+      "notes": null
+    },
+    {
+      "trade_id": "04750613",
+      "symbol": "AAPL",
+      "action": "SELL",
+      "quantity": 2.75,
+      "price": 263.4,
+      "value": 724.35,
+      "timestamp": "2026-04-17T04:40:37.667733",
+      "notes": null
+    },
+    {
+      "trade_id": "970e9c3a",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:02:51.392727",
+      "notes": null
+    },
+    {
+      "trade_id": "2385ebed",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:02:53.397178",
+      "notes": null
+    },
+    {
+      "trade_id": "f3b1c7c7",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:02:55.220851",
+      "notes": null
+    },
+    {
+      "trade_id": "3749c82a",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:02:56.155433",
+      "notes": null
+    },
+    {
+      "trade_id": "966be93d",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:02:57.853205",
+      "notes": null
+    },
+    {
+      "trade_id": "2b9b05f6",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:02:58.440944",
+      "notes": null
+    },
+    {
+      "trade_id": "663b0f8a",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:02:58.737649",
+      "notes": null
+    },
+    {
+      "trade_id": "21866998",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 1.0,
+      "price": 263.4,
+      "value": 263.4,
+      "timestamp": "2026-04-17T05:05:45.545370",
+      "notes": null
+    },
+    {
+      "trade_id": "2200912e",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 6.0,
+      "price": 263.4,
+      "value": 1580.4,
+      "timestamp": "2026-04-17T10:21:33.256865",
+      "notes": null
+    },
+    {
+      "trade_id": "5ba748c8",
+      "symbol": "AAPL",
+      "action": "SELL",
+      "quantity": 11.125,
+      "price": 263.4,
+      "value": 2930.32,
+      "timestamp": "2026-04-17T10:22:23.078627",
+      "notes": null
+    }
+  ],
+  "realized_pnl": 4.97,
+  "unrealized_pnl": 0.0,
+  "invested_value": 2930.32,
+  "total_value": 100007.95
+}

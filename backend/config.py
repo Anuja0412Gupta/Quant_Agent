@@ -1,10 +1,18 @@
 """
-QuantAgent Configuration
-========================
+QuantAgent v3.0 Configuration
+==============================
 Central settings for all agents, risk management, and RL controller.
+Research-grade constants with burn-in enforcement and typed boundaries.
 """
 
 import os
+
+# ── Load .env if present ──────────────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass  # python-dotenv optional
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 DEFAULT_SYMBOL = "AAPL"
@@ -94,3 +102,61 @@ CORS_ORIGINS = [
     "http://localhost:3000",
     *([_vercel] if _vercel else []),   # your Vercel URL injected at runtime
 ]
+
+# ── v3.0 Research-Grade Constants ─────────────────────────────────────────────
+
+# Burn-in: minimum bars before any feature or training is valid.
+# 252 = 1 trading year ensures all 60-bar rolling windows are fully saturated.
+FEATURE_BURNIN_BARS     = 252
+MIN_EPISODE_LENGTH      = 63      # min bars in a training episode (~1 quarter)
+HMM_MIN_FIT_BARS        = 252
+HMM_REFIT_PERIOD_BARS   = 63
+
+# ── Model paths ───────────────────────────────────────────────────────────────
+MODEL_SAVE_DIR          = os.environ.get("MODEL_SAVE_DIR",  "./models")
+FINBERT_CACHE_DIR       = os.environ.get("FINBERT_CACHE_DIR", "./models/finbert")
+YFINANCE_TZ_CACHE_DIR   = os.environ.get("YFINANCE_TZ_CACHE_DIR", "./models/yfinance_tz")
+PAPER_PORTFOLIO_PATH    = os.environ.get("PAPER_PORTFOLIO_PATH",
+                                         "./data/paper_portfolio.json")
+
+# ── External API Keys (loaded from .env) ──────────────────────────────────────
+FRED_API_KEY            = os.environ.get("FRED_API_KEY", "")
+NEWS_API_KEY            = os.environ.get("NEWS_API_KEY", "")
+REDDIT_CLIENT_ID        = os.environ.get("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET    = os.environ.get("REDDIT_CLIENT_SECRET", "")
+
+# ── Sentiment decay half-lives (hours) ────────────────────────────────────────
+SENTIMENT_HALF_LIVES    = {
+    "earnings_news":  4,
+    "ticker_news":   24,
+    "reddit":        12,
+    "macro_news":    48,
+}
+
+# ── Execution model ───────────────────────────────────────────────────────────
+SLIPPAGE_DAILY          = 0.0005
+SLIPPAGE_INTRADAY       = 0.001
+COMMISSION_RATE         = 0.001
+MAX_PARTICIPATION_RATE  = 0.10
+
+# ── RL training ───────────────────────────────────────────────────────────────
+RL_TRAIN_STEPS_DAILY    = 25_000
+RL_TRAIN_STEPS_INTRA    = 50_000
+CURRICULUM_STAGE_1      = 5_000
+CURRICULUM_STAGE_2      = 15_000
+
+# ── Risk limits ───────────────────────────────────────────────────────────────
+CVAR_NO_TRADE_THRESHOLD = 0.04
+CVAR_REDUCE_THRESHOLD   = 0.025
+MAX_DRAWDOWN_LIMIT      = 0.20
+LAGRANGIAN_LR           = 0.01
+
+# ── Defaults ─────────────────────────────────────────────────────────────────
+DEFAULT_SYMBOL    = "AAPL"
+DEFAULT_TIMEFRAME = "1d"
+MAX_DRAWDOWN_PCT  = MAX_DRAWDOWN_LIMIT   # alias used by risk_management_agent
+
+# ── Legacy aliases ────────────────────────────────────────────────────────────
+RL_MODEL_PATH    = os.path.join(MODEL_SAVE_DIR, "rl_model")
+RL_TIMESTEPS     = RL_TRAIN_STEPS_DAILY
+RL_LEARNING_RATE = 3e-4

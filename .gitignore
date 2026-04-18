@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Logs and databases
+*.log
+backend/logs/
+backend/server.err.log
+backend/server.out.log
+backend/error_log.txt
+
+# Temp output files
+backend/out.json
+backend/tmp_analyze.json
+backend/api_test.json
+
+# Node modules
+node_modules/
+frontend/node_modules/
+dist/
+build/
+.DS_Store
