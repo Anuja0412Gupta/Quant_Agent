@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import os
+import sys
+
 import numpy as np
 import pandas as pd
 
@@ -60,3 +64,48 @@ def hurst_exponent(ts: np.ndarray, min_lag: int = 2, max_lag: int = 20) -> float
     log_tau  = np.log([v[1] for v in valid])
     poly     = np.polyfit(log_lags, log_tau, 1)
     return float(poly[0])
+
+
+def ensure_numpy_pickle_compat() -> None:
+    """
+    Register NumPy import aliases used by pickles/models saved under
+    different NumPy internals (e.g. numpy._core vs numpy.core).
+    """
+    alias_map = {
+        "numpy._core": "numpy.core",
+        "numpy._core.numeric": "numpy.core.numeric",
+        "numpy._core.multiarray": "numpy.core.multiarray",
+        "numpy._core.umath": "numpy.core.umath",
+    }
+    for alias_name, target_name in alias_map.items():
+        if alias_name in sys.modules:
+            continue
+        try:
+            sys.modules[alias_name] = importlib.import_module(target_name)
+        except Exception:
+            # Best-effort shim: if a target module is unavailable, leave it untouched.
+            pass
+
+
+def resolve_model_zip_path(model_save_dir: str, ticker: str = "AAPL", timeframe: str = "1d") -> str:
+    """
+    Resolve model .zip location across canonical and legacy directories.
+    """
+    ticker = str(ticker).upper().strip()
+    timeframe = str(timeframe).lower().strip()
+    filename = f"rl_{ticker}_{timeframe}.zip"
+
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    repo_root = os.path.abspath(os.path.join(backend_dir, ".."))
+
+    candidates = []
+    for base in [model_save_dir, os.path.join(backend_dir, "models"), os.path.join(repo_root, "models"), os.path.join(os.getcwd(), "models")]:
+        p = os.path.abspath(os.path.join(base, filename))
+        if p not in candidates:
+            candidates.append(p)
+
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+
+    return candidates[0]

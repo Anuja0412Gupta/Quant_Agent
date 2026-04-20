@@ -24,6 +24,19 @@ export default function RLBrainTab({ analysis }) {
   const [ticker, setTicker]     = useState('AAPL');
   const [progress, setProgress] = useState(0);
 
+  // Upload model state
+  const [uploadFile, setUploadFile]     = useState(null);
+  const [uploadStatus, setUploadStatus] = useState(null); // null | 'uploading' | 'success' | 'error'
+  const [uploadMsg, setUploadMsg]       = useState('');
+  const [modelInfo, setModelInfo]       = useState(null);
+
+  // Fetch model info on mount
+  useEffect(() => {
+    axios.get(`${API}/rl/model-info`, { params: { symbol: ticker } })
+      .then(({ data }) => setModelInfo(data))
+      .catch(() => {});
+  }, [ticker]);
+
   // Poll brain when training is active
   useEffect(() => {
     let intervalId;
@@ -79,12 +92,36 @@ export default function RLBrainTab({ analysis }) {
     }
   };
 
+  const handleUploadModel = async () => {
+    if (!uploadFile) return;
+    setUploadStatus('uploading');
+    setUploadMsg('');
+    try {
+      const form = new FormData();
+      form.append('file', uploadFile);
+      const { data } = await axios.post(
+        `${API}/rl/upload-model?symbol=${ticker}&timeframe=1d`,
+        form,
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60_000 }
+      );
+      // model_ok = live verification passed; 'saved' = on disk, needs restart
+      setUploadStatus(data.model_ok ? 'success' : 'saved');
+      setUploadMsg(data.message || 'Model uploaded');
+      setModelInfo({ exists: true, symbol: ticker, size_kb: data.size_kb, modified_at: new Date().toISOString() });
+      setUploadFile(null);
+    } catch (e) {
+      setUploadStatus('error');
+      setUploadMsg(e.response?.data?.detail || e.message || 'Upload failed');
+    }
+  };
+
   const rl      = analysis?.rl_weights || {};
   const action  = rl.effective_action ?? 0;
   const posSize = rl.effective_position ?? 0;
   const disagr  = rl.disagreement_score ?? 0;
   const gate    = rl.gate_value ?? 1;
   const regime  = rl.active_regime ?? '—';
+  const actionThreshold = 0.02;
 
   // Gauge needle position: action ∈ [-1, +1] → rotate from -90° to +90°
   const needleDeg = action * 90;
@@ -138,7 +175,7 @@ export default function RLBrainTab({ analysis }) {
                   x1="70" y1="70"
                   x2={70 + 50 * Math.cos((needleDeg - 90) * Math.PI / 180)}
                   y2={70 + 50 * Math.sin((needleDeg - 90) * Math.PI / 180)}
-                  stroke={action > 0.1 ? '#68d391' : action < -0.1 ? '#fc8181' : '#f6e05e'}
+                  stroke={action > actionThreshold ? '#68d391' : action < -actionThreshold ? '#fc8181' : '#f6e05e'}
                   strokeWidth="3" strokeLinecap="round"
                   style={{ transition: 'all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)' }}
                 />
@@ -146,11 +183,11 @@ export default function RLBrainTab({ analysis }) {
               </svg>
             </div>
             <div style={{ fontSize: 28, fontWeight: 800, fontFamily: 'monospace',
-                          color: action > 0.1 ? '#68d391' : action < -0.1 ? '#fc8181' : '#f6e05e' }}>
+                          color: action > actionThreshold ? '#68d391' : action < -actionThreshold ? '#fc8181' : '#f6e05e' }}>
               {action.toFixed(4)}
             </div>
             <div style={{ fontSize: 12, color: '#8b9fc0', marginTop: 4 }}>
-              {rl.direction || 'FLAT'} · {(posSize * 100).toFixed(1)}% position
+              {rl.direction || 'FLAT'} · {(posSize * 100).toFixed(2)}% position
             </div>
           </div>
         </div>
@@ -292,6 +329,126 @@ export default function RLBrainTab({ analysis }) {
           </div>
         )}
       </div>
+
+      {/* ═══ Train on Google Colab ═══ */}
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">🚀 Train on Google Colab (GPU)</span>
+        </div>
+        <div style={{ fontSize: 12, color: '#a0aec0', marginBottom: 16, lineHeight: 1.6 }}>
+          Train the RL model on a free GPU in ~30 min instead of 3-5 hours locally.
+          <strong style={{ color: '#f6e05e' }}> 3 easy steps:</strong>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
+          {[
+            { step: '1', title: 'Open Colab', desc: 'Click the button below to open the training notebook', icon: '📓' },
+            { step: '2', title: 'Run All Cells', desc: 'Select Runtime → Run All. Wait ~30 min on T4 GPU', icon: '⚡' },
+            { step: '3', title: 'Upload Model', desc: 'Download the .zip file and upload it here', icon: '📤' },
+          ].map(s => (
+            <div key={s.step} style={{
+              background: 'rgba(99,102,241,0.06)', borderRadius: 10, padding: 14,
+              border: '1px solid rgba(99,102,241,0.15)', textAlign: 'center'
+            }}>
+              <div style={{ fontSize: 24, marginBottom: 6 }}>{s.icon}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#c3dafe', marginBottom: 4 }}>Step {s.step}: {s.title}</div>
+              <div style={{ fontSize: 11, color: '#8b9fc0', lineHeight: 1.4 }}>{s.desc}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Open Colab button */}
+          <a
+            href="https://colab.research.google.com/github/Anuja0412Gupta/Quant_Agent/blob/main/colab_train.ipynb"
+            target="_blank" rel="noopener noreferrer"
+            style={{
+              background: 'linear-gradient(135deg, #f9ab00, #ea8600)', color: '#000',
+              padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 700,
+              textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6,
+              transition: 'transform 0.2s, box-shadow 0.2s',
+            }}
+            onMouseEnter={e => { e.target.style.transform = 'scale(1.03)'; e.target.style.boxShadow = '0 4px 20px rgba(249,171,0,0.3)'; }}
+            onMouseLeave={e => { e.target.style.transform = 'scale(1)'; e.target.style.boxShadow = 'none'; }}
+          >
+            <img src="https://colab.research.google.com/img/colab_favicon_256px.png" width="18" height="18" alt="" style={{ borderRadius: 3 }} />
+            Open Colab Notebook
+          </a>
+
+          {/* Divider */}
+          <div style={{ width: 1, height: 32, background: 'rgba(255,255,255,0.1)' }} />
+
+          {/* File picker */}
+          <label style={{
+            cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px dashed rgba(255,255,255,0.2)',
+            borderRadius: 8, padding: '8px 16px', fontSize: 12, color: '#a0aec0',
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            transition: 'border-color 0.2s',
+          }}>
+            📁 {uploadFile ? uploadFile.name : 'Choose .zip model file'}
+            <input type="file" accept=".zip" style={{ display: 'none' }}
+              onChange={e => { setUploadFile(e.target.files[0] || null); setUploadStatus(null); }} />
+          </label>
+
+          {/* Upload button */}
+          <button
+            onClick={handleUploadModel}
+            disabled={!uploadFile || uploadStatus === 'uploading'}
+            style={{
+              background: uploadFile ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(255,255,255,0.05)',
+              color: uploadFile ? '#fff' : '#647091', border: 'none', borderRadius: 8,
+              padding: '8px 18px', fontSize: 12, fontWeight: 600, cursor: uploadFile ? 'pointer' : 'not-allowed',
+              transition: 'all 0.2s',
+            }}
+          >
+            {uploadStatus === 'uploading' ? '⏳ Uploading…' : '📤 Upload Model'}
+          </button>
+        </div>
+
+        {/* Upload feedback — 4 states: uploading / success / saved / error */}
+        {uploadStatus && (
+          <div style={{
+            marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 12,
+            background:
+              uploadStatus === 'success'  ? 'rgba(104,211,145,0.1)' :
+              uploadStatus === 'saved'    ? 'rgba(246,224,94,0.08)' :
+              uploadStatus === 'error'    ? 'rgba(252,129,129,0.1)' :
+                                           'rgba(99,102,241,0.1)',
+            border: `1px solid ${
+              uploadStatus === 'success'  ? 'rgba(104,211,145,0.3)' :
+              uploadStatus === 'saved'    ? 'rgba(246,224,94,0.3)'  :
+              uploadStatus === 'error'    ? 'rgba(252,129,129,0.3)' :
+                                           'rgba(99,102,241,0.3)'}`,
+            color:
+              uploadStatus === 'success'  ? '#68d391' :
+              uploadStatus === 'saved'    ? '#f6e05e' :
+              uploadStatus === 'error'    ? '#fc8181' :
+                                           '#818cf8',
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: uploadStatus === 'saved' ? 4 : 0 }}>
+              {uploadStatus === 'success'  ? '✅' :
+               uploadStatus === 'saved'    ? '⚠️' :
+               uploadStatus === 'error'    ? '❌' : '⏳'} {uploadMsg}
+            </div>
+            {uploadStatus === 'saved' && (
+              <div style={{ fontSize: 11, opacity: 0.8, marginTop: 4 }}>
+                📌 Model is saved to disk. <strong>Restart your backend</strong> (Ctrl+C → python main.py) to activate it for backtest & analysis.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Current model info */}
+        {modelInfo?.exists && (
+          <div style={{ marginTop: 12, padding: '8px 14px', borderRadius: 8, background: 'rgba(255,255,255,0.03)',
+                        fontSize: 11, color: '#8b9fc0', display: 'flex', gap: 16 }}>
+            <span>📦 Current Model: <strong style={{ color: '#c3dafe' }}>{modelInfo.symbol}</strong></span>
+            <span>Size: <strong>{modelInfo.size_kb} KB</strong></span>
+            <span>Updated: <strong>{new Date(modelInfo.modified_at).toLocaleString()}</strong></span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
+

@@ -15,6 +15,14 @@ from pydantic import BaseModel, Field, validator
 
 # ── Request Schemas ───────────────────────────────────────────────────────────
 
+class SignupRequest(BaseModel):
+    username: str = Field(..., min_length=3)
+    password: str = Field(..., min_length=4)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 class AnalyzeRequest(BaseModel):
     symbol:    str = Field("AAPL", description="Ticker symbol")
     timeframe: str = Field("1d", description="'1d' or '1h'")

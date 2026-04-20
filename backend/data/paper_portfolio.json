@@ -1,9 +1,9 @@
 {
-  "cash": 97077.6300239563,
+  "cash": 95621.30644874879,
   "positions": {
     "AAPL": {
-      "quantity": 11.125,
-      "avg_price": 263.1319
+      "quantity": 16.514200000000002,
+      "avg_price": 266.3316
     }
   },
   "history": [
@@ -170,10 +170,30 @@
       "value": 2930.32,
       "timestamp": "2026-04-17T10:22:23.078627",
       "notes": null
+    },
+    {
+      "trade_id": "f5bf65d0",
+      "symbol": "AAPL",
+      "action": "SELL",
+      "quantity": 2.0552,
+      "price": 270.23,
+      "value": 555.38,
+      "timestamp": "2026-04-20T05:22:12.460176",
+      "notes": null
+    },
+    {
+      "trade_id": "10b2042e",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "quantity": 7.4444,
+      "price": 270.23,
+      "value": 2011.7,
+      "timestamp": "2026-04-20T08:21:14.029676",
+      "notes": null
     }
   ],
-  "realized_pnl": 4.97,
+  "realized_pnl": 19.56,
   "unrealized_pnl": 0.0,
-  "invested_value": 2930.32,
-  "total_value": 100007.95
+  "invested_value": 4462.63,
+  "total_value": 100083.94
 }

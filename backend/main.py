@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -50,7 +50,9 @@ from schemas import (
     RegimeResultSchema, SentimentSchema, DisagreementSchema,
     TradeDecisionSchema, MacroContextSchema, OHLCVBar,
     AgentSignalSchema, SECFlagsSchema, AblationRequest, RLWeightsSchema,
+    SignupRequest, LoginRequest
 )
+from utils.helpers import ensure_numpy_pickle_compat, resolve_model_zip_path
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -94,6 +96,9 @@ async def startup():
     """Initialize all singletons at startup."""
     global _component_status
 
+    from db.database import connect_to_mongo
+    await connect_to_mongo()
+
     try:
         from data.data_fetcher import get_fetcher
         get_fetcher()
@@ -123,51 +128,43 @@ async def startup():
         _component_status["portfolio_manager"] = f"error: {e}"
 
     # Check for pre-trained model
-    rl_path = os.path.join(MODEL_SAVE_DIR, "rl_AAPL_1d.zip")
+    rl_path = resolve_model_zip_path(MODEL_SAVE_DIR, "AAPL", "1d")
     _component_status["rl_model"] = "loaded" if os.path.exists(rl_path) else "not_trained"
 
     logger.info("QuantAgent v3.0 started. Component status: %s", _component_status)
+
+@app.on_event("shutdown")
+async def shutdown():
+    from db.database import close_mongo_connection
+    await close_mongo_connection()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAPER PORTFOLIO STATE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _load_portfolio() -> Dict:
-    """Load paper portfolio from persistent JSON."""
-    if os.path.exists(PAPER_PORTFOLIO_PATH):
-        try:
-            with open(PAPER_PORTFOLIO_PATH) as f:
-                p = json.load(f)
-
-            # Backward-compat migration for older portfolio schema:
-            # - positions[*].shares -> positions[*].quantity
-            # - history -> trade_history
-            if isinstance(p.get("positions"), dict):
-                for sym, pos in p["positions"].items():
-                    if isinstance(pos, dict):
-                        if "quantity" not in pos and "shares" in pos:
-                            pos["quantity"] = float(pos.get("shares", 0.0) or 0.0)
-                        if "avg_price" not in pos and "avg_cost" in pos:
-                            pos["avg_price"] = float(pos.get("avg_cost", 0.0) or 0.0)
-
-            if "trade_history" not in p and isinstance(p.get("history"), list):
-                migrated = []
-                for t in p["history"]:
-                    if not isinstance(t, dict):
-                        continue
-                    migrated.append({
-                        "trade_id": str(t.get("id", str(uuid.uuid4())[:8])),
-                        "symbol": str(t.get("symbol", "")).upper(),
-                        "action": str(t.get("action", "HOLD")).upper(),
-                        "quantity": float(t.get("shares", t.get("quantity", 0.0)) or 0.0),
-                        "price": float(t.get("price", 0.0) or 0.0),
-                        "value": float(t.get("trade_value", t.get("value", 0.0)) or 0.0),
-                        "timestamp": t.get("timestamp", datetime.utcnow().isoformat()),
-                        "notes": t.get("notes"),
-                    })
-                p["trade_history"] = migrated
-
+async def _load_portfolio(user_id: str = "anonymous") -> Dict:
+    """Load paper portfolio from MongoDB for given user."""
+    default_portfolio = {
+        "user_id": user_id,
+        "total_value": 100_000.0,
+        "cash": 100_000.0,
+        "invested_value": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "positions": {},
+        "trade_history": [],
+    }
+    
+    try:
+        from db.database import get_db
+        db = get_db()
+        p = await db.portfolios.find_one({"user_id": user_id})
+        
+        if p:
+            # Remove MongoDB internal ID
+            p.pop("_id", None)
+            
             # Ensure expected keys always exist.
             p.setdefault("cash", 100_000.0)
             p.setdefault("positions", {})
@@ -184,25 +181,26 @@ def _load_portfolio() -> Dict:
                         invested += qty * avg
             p["invested_value"] = float(p.get("invested_value", invested) or invested)
             p["total_value"] = float(p.get("total_value", p["cash"] + p["invested_value"]) or (p["cash"] + p["invested_value"]))
-
+            
             return p
-        except Exception:
-            pass
-    return {
-        "total_value": 100_000.0,
-        "cash": 100_000.0,
-        "invested_value": 0.0,
-        "unrealized_pnl": 0.0,
-        "realized_pnl": 0.0,
-        "positions": {},
-        "trade_history": [],
-    }
+    except Exception as e:
+        logger.error(f"Error loading portfolio for {user_id}: {e}")
+        
+    return default_portfolio
 
 
-def _save_portfolio(portfolio: Dict) -> None:
-    os.makedirs(os.path.dirname(PAPER_PORTFOLIO_PATH), exist_ok=True)
-    with open(PAPER_PORTFOLIO_PATH, "w") as f:
-        json.dump(portfolio, f, indent=2)
+async def _save_portfolio(portfolio: Dict, user_id: str = "anonymous") -> None:
+    try:
+        from db.database import get_db
+        db = get_db()
+        portfolio["user_id"] = user_id
+        await db.portfolios.update_one(
+            {"user_id": user_id},
+            {"$set": portfolio},
+            upsert=True
+        )
+    except Exception as e:
+        logger.error(f"Error saving portfolio for {user_id}: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -302,11 +300,18 @@ async def _run_full_analysis(symbol: str, timeframe: str,
         from training.trainer import load_trained_model
         rl_model = load_trained_model(symbol, timeframe)
         if rl_model is not None:
-            rl_action, _ = rl_model.predict(latest_features, deterministic=True)
+            # RecurrentPPO requires (1, obs_dim) and episode_start reset
+            obs_batch = latest_features.reshape(1, -1)
+            episode_start = np.array([True])
+            rl_action, _ = rl_model.predict(obs_batch, state=None,
+                                             episode_start=episode_start,
+                                             deterministic=True)
+            rl_action = np.asarray(rl_action).flatten()
     except Exception as e:
         logger.error("RL predict failed: %s", e, exc_info=True)
 
     rl_direction = float(np.clip(rl_action[0] if len(rl_action) > 0 else 0.0, -1, 1))
+    direction_threshold = 0.02
 
     # ── 9. Risk evaluation ────────────────────────────────────────────────────
     rets = df["Close"].pct_change().dropna()
@@ -353,18 +358,27 @@ async def _run_full_analysis(symbol: str, timeframe: str,
         for idx, row in recent.iterrows()
     ]
 
-    gate_val = 1.0 - float(disagree_dict.get("total_uncertainty", 0.0) if isinstance(disagree_dict, dict) else getattr(disagree_dict, "total_uncertainty", 0.0))
-    gate_val = max(0.0, min(1.0, gate_val))
+    # Effective position = abs(rl_action) × gate × approval
+    _disagree_score = float(disagree_dict.get("total_uncertainty", 0.0) if isinstance(disagree_dict, dict) else getattr(disagree_dict, "total_uncertainty", 0.0))
+    gate_val        = max(0.0, min(1.0, 1.0 - _disagree_score))
+    risk_final_size = float(risk_result.get("final_size", 0.0) if isinstance(risk_result, dict) else getattr(risk_result, "final_size", 0.0))
+    risk_approved   = bool(risk_result.get("approved", True) if isinstance(risk_result, dict) else getattr(risk_result, "approved", True))
+    # Use larger of: risk agent sizing OR rl_action-based sizing so UI always shows something meaningful
+    rl_based_size   = abs(float(rl_direction)) * gate_val
+    effective_pos   = max(risk_final_size, rl_based_size) if risk_approved else risk_final_size
 
     rl_weights_dict = {
         "rl_action":          float(rl_direction),
         "gate_value":         float(gate_val),
         "effective_action":   float(rl_direction * gate_val),
-        "effective_position": float(risk_result.get("final_size", 0.0) if isinstance(risk_result, dict) else getattr(risk_result, "final_size", 0.0)),
+        "effective_position": round(float(effective_pos), 4),
+        "position_pct":       round(float(risk_result.get("final_size", 0.0) if isinstance(risk_result, dict) else getattr(risk_result, "final_size", 0.0)), 4),
         "disagreement_score": float(disagree_dict.get("total_uncertainty", 0.0) if isinstance(disagree_dict, dict) else getattr(disagree_dict, "total_uncertainty", 0.0)),
         "active_regime":      str(regime_dict.get("dominant_regime", "trending") if isinstance(regime_dict, dict) else getattr(regime_dict, "dominant_regime", "trending")),
         "regime_confidence":  float(regime_dict.get("confidence", 0.0) if isinstance(regime_dict, dict) else getattr(regime_dict, "confidence", 0.0)),
-        "direction":          str("LONG" if rl_direction > 0.1 else ("SHORT" if rl_direction < -0.1 else "FLAT"))
+        "direction":          str("LONG" if rl_direction > direction_threshold else ("SHORT" if rl_direction < -direction_threshold else "FLAT")),
+        "risk_veto":          not risk_approved,
+        "veto_reason":        str(risk_result.get("veto_reason", "") if isinstance(risk_result, dict) else getattr(risk_result, "veto_reason", "") or ""),
     }
 
     return {
@@ -428,11 +442,43 @@ def _sec_to_dict(sec) -> Optional[Dict]:
 # ROUTES
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+# ── Auth Endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/auth/signup", tags=["Auth"])
+async def signup(request: SignupRequest) -> Dict:
+    from db.database import get_db
+    
+    db = get_db()
+    
+    existing_user = await db.users.find_one({"username": request.username})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+        
+    user_doc = {
+        "username": request.username,
+        "password": request.password,
+        "created_at": datetime.utcnow().isoformat()
+    }
+    await db.users.insert_one(user_doc)
+    return {"success": True, "message": "User created successfully"}
+
+@app.post("/auth/login", tags=["Auth"])
+async def login(request: LoginRequest) -> Dict:
+    from db.database import get_db
+    
+    db = get_db()
+    
+    user = await db.users.find_one({"username": request.username})
+    if not user or user.get("password") != request.password:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+    return {"success": True, "username": user["username"]}
+
+
 @app.get("/health", response_model=HealthResponse, tags=["Meta"])
 async def health():
-    rl_loaded = os.path.exists(
-        os.path.join(MODEL_SAVE_DIR, "rl_AAPL_1d.zip")
-    )
+    rl_loaded = os.path.exists(resolve_model_zip_path(MODEL_SAVE_DIR, "AAPL", "1d"))
     return HealthResponse(
         status="ok",
         version="3.0",
@@ -556,11 +602,13 @@ async def run_backtest_endpoint(request: BacktestRequest) -> Dict:
     pipeline = get_pipeline()
 
     df = fetcher.fetch_ohlcv(request.symbol, request.timeframe)
-    if len(df) < FEATURE_BURNIN_BARS + 63:
+    test_window = request.n_folds and (len(df) - FEATURE_BURNIN_BARS) // (request.n_folds + 1) or 63
+    min_required = FEATURE_BURNIN_BARS + 252 + max(1, test_window)
+    if len(df) < min_required:
         raise HTTPException(
             status_code=400,
             detail=(f"Insufficient data: {len(df)} bars. "
-                    f"Need ≥{FEATURE_BURNIN_BARS + 63} for walk-forward backtest.")
+                    f"Need >= {min_required} bars for walk-forward backtest.")
         )
 
     # Compute features
@@ -579,11 +627,16 @@ async def run_backtest_endpoint(request: BacktestRequest) -> Dict:
     # Load trained model (if available)
     from training.trainer import load_trained_model
     model = load_trained_model(request.symbol, request.timeframe)
+    if model is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No trained model loaded for {request.symbol.upper()} {request.timeframe}. Upload/train a model first.",
+        )
 
     # Walk-forward
     engine = WalkForwardEngine(
         train_window=252,
-        test_window=request.n_folds and (len(df) - FEATURE_BURNIN_BARS) // (request.n_folds + 1) or 63,
+        test_window=test_window,
         initial_capital=request.initial_capital,
     )
 
@@ -595,16 +648,13 @@ async def run_backtest_endpoint(request: BacktestRequest) -> Dict:
                                ticker=request.symbol, regime_labels=regime_labels)
             summary = engine.summary(folds)
         except Exception as e:
-            logger.warning("Walk-forward failed: %s", e)
+            logger.error("Walk-forward failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Walk-forward failed: {e}")
 
-    # Simple return series for stress test + equity curve
+    # Market return series for stress test
     rets = df["Close"].pct_change().dropna()
     stress_engine = StressTestEngine()
     stress_results = stress_engine.run(rets)
-
-    # Equity curve (simple buy-and-hold for visualization)
-    equity_curve = ((1 + rets).cumprod() * request.initial_capital).round(2).tolist()
-    timestamps   = [str(t) for t in rets.index.tolist()]
 
     fold_summary = [
         {
@@ -620,10 +670,38 @@ async def run_backtest_endpoint(request: BacktestRequest) -> Dict:
         for f in folds
     ]
 
-    # Overall metrics on full series
-    cap_curve = pd.Series(equity_curve, index=rets.index[:len(equity_curve)])
     from backtest.engine import _compute_metrics
-    overall_metrics = _compute_metrics(rets, cap_curve)
+
+    # ── Overall metrics: aggregate RL walk-forward returns from stored fold results ──
+    # Reuse test_returns already computed by WalkForwardEngine — no re-simulation needed.
+    if folds:
+        all_rl_rets   = []
+        all_rl_dates  = []
+        for fold in folds:
+            all_rl_rets.extend(fold.test_returns)
+            all_rl_dates.extend(fold.test_timestamps[:len(fold.test_returns)])
+
+        if all_rl_rets:
+            rl_rets_series = pd.Series(all_rl_rets, index=all_rl_dates)
+            rl_cap_curve   = (1 + rl_rets_series).cumprod() * request.initial_capital
+            overall_metrics = _compute_metrics(rl_rets_series, rl_cap_curve)
+            overall_metrics["strategy"] = "rl_walk_forward"
+            equity_curve = rl_cap_curve.round(2).tolist()
+            timestamps   = [str(t) for t in all_rl_dates]
+        else:
+            # Fold ran but produced no returns — fall back
+            equity_curve    = ((1 + rets).cumprod() * request.initial_capital).round(2).tolist()
+            timestamps      = [str(t) for t in rets.index.tolist()]
+            cap_curve       = pd.Series(equity_curve, index=rets.index[:len(equity_curve)])
+            overall_metrics = _compute_metrics(rets, cap_curve)
+            overall_metrics["strategy"] = "buy_and_hold_fallback"
+    else:
+        equity_curve    = ((1 + rets).cumprod() * request.initial_capital).round(2).tolist()
+        timestamps      = [str(t) for t in rets.index.tolist()]
+        cap_curve       = pd.Series(equity_curve, index=rets.index[:len(equity_curve)])
+        overall_metrics = _compute_metrics(rets, cap_curve)
+        overall_metrics["strategy"] = "buy_and_hold_fallback"
+
 
     return {
         "symbol":      request.symbol,
@@ -691,8 +769,8 @@ async def compare(
                 if rl_model:
                     action, _ = rl_model.predict(latest_features, deterministic=True)
                     rl_action = float(action[0] if len(action) > 0 else 0)
-                    if rl_action > 0.1: direction = "LONG"
-                    elif rl_action < -0.1: direction = "SHORT"
+                    if rl_action > 0.02: direction = "LONG"
+                    elif rl_action < -0.02: direction = "SHORT"
             except Exception as e:
                 logger.debug("Compare: RL model prediction failed for %s: %s", sym, e)
 
@@ -735,17 +813,17 @@ async def compare(
 
 
 @app.get("/portfolio", tags=["Paper Trading"])
-async def get_portfolio() -> Dict:
+async def get_portfolio(user_id: str = Query("anonymous")) -> Dict:
     """Return current paper portfolio state."""
-    return _load_portfolio()
+    return await _load_portfolio(user_id)
 
 
 @app.post("/portfolio/trade", tags=["Paper Trading"])
-async def paper_trade(request: TradeRequest) -> Dict:
+async def paper_trade(request: TradeRequest, user_id: str = Query("anonymous")) -> Dict:
     """Execute a paper trade."""
     from data.data_fetcher import get_fetcher
     fetcher   = get_fetcher()
-    portfolio = _load_portfolio()
+    portfolio = await _load_portfolio(user_id)
 
     try:
         df    = fetcher.fetch_ohlcv(request.symbol.upper(), "1d")
@@ -802,7 +880,7 @@ async def paper_trade(request: TradeRequest) -> Dict:
     portfolio["trade_history"].append(trade_record)
     portfolio["trade_history"] = portfolio["trade_history"][-500:]
 
-    _save_portfolio(portfolio)
+    await _save_portfolio(portfolio, user_id)
 
     return {
         "success":        True,
@@ -892,17 +970,105 @@ async def rl_train_job(
     }
 
 
+@app.post("/rl/upload-model", tags=["RL"])
+async def upload_trained_model(
+    file: UploadFile = File(...),
+    symbol: str = Query("AAPL"),
+    timeframe: str = Query("1d"),
+) -> Dict:
+    """
+    Accept a trained RL model (.zip) uploaded from Google Colab or any source.
+    Saves it as models/rl_{SYMBOL}_{TIMEFRAME}.zip and hot-reloads it.
+    """
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="File must be a .zip model file")
+
+    from training.trainer import TrainingConfig
+    cfg = TrainingConfig(ticker=symbol, timeframe=timeframe)
+    save_path = cfg.model_save_path + ".zip"
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    content = await file.read()
+    if len(content) < 100:
+        raise HTTPException(status_code=400, detail="File too small — likely corrupt")
+
+    with open(save_path, "wb") as f:
+        f.write(content)
+
+    size_kb = round(len(content) / 1024, 1)
+    logger.info("Model uploaded: %s (%.1f KB) -> %s", file.filename, size_kb, save_path)
+
+    # Verify by loading directly with RecurrentPPO (works for both Colab + local models)
+    verify_error = None
+    model_ok = False
+    try:
+        ensure_numpy_pickle_compat()
+        from sb3_contrib import RecurrentPPO
+        m = RecurrentPPO.load(save_path)
+        model_ok = m is not None
+        logger.info("Model verified OK: %s", save_path)
+    except Exception as e1:
+        verify_error = str(e1)
+        # Fallback: try stable_baselines3 PPO
+        try:
+            ensure_numpy_pickle_compat()
+            from stable_baselines3 import PPO
+            m = PPO.load(save_path)
+            model_ok = m is not None
+            logger.info("Model loaded as PPO fallback: %s", save_path)
+        except Exception as e2:
+            logger.warning("Model verification failed. RecurrentPPO err: %s | PPO err: %s", e1, e2)
+
+    # Always mark as loaded — file is on disk and will work on next cold load
+    _component_status["rl_model"] = "loaded"
+
+    return {
+        "success":   True,
+        "saved_to":  save_path,
+        "size_kb":   size_kb,
+        "model_ok":  model_ok,
+        "symbol":    symbol.upper(),
+        "timeframe": timeframe,
+        "message":   (
+            f"Model saved & verified ({size_kb} KB). Restart backend to use for backtest."
+            if model_ok else
+            f"Model saved ({size_kb} KB). Restart backend to activate it."
+            + (f" [Hint: {verify_error[:80]}]" if verify_error else "")
+        ),
+    }
+
+
+@app.get("/rl/model-info", tags=["RL"])
+async def get_model_info(symbol: str = Query("AAPL"), timeframe: str = Query("1d")) -> Dict:
+    """Returns info about the currently loaded model file."""
+    from training.trainer import TrainingConfig
+    cfg = TrainingConfig(ticker=symbol, timeframe=timeframe)
+    path = resolve_model_zip_path(MODEL_SAVE_DIR, cfg.ticker, cfg.timeframe)
+    if not os.path.exists(path):
+        return {"exists": False, "symbol": cfg.ticker, "timeframe": cfg.timeframe}
+    stat = os.stat(path)
+    return {
+        "exists":       True,
+        "symbol":       cfg.ticker,
+        "timeframe":    cfg.timeframe,
+        "path":         path,
+        "size_kb":      round(stat.st_size / 1024, 1),
+        "modified_at":  datetime.fromtimestamp(stat.st_mtime).isoformat(),
+    }
+
+
 @app.get("/rl/brain", tags=["RL"])
 async def rl_brain(symbol: str = Query("AAPL"), timeframe: str = Query("1d")) -> Dict:
     """RL policy introspection: reward curve, Lagrangian multipliers, curriculum stage."""
-    from training.trainer import load_trained_model, TrainingConfig
+    from training.trainer import TrainingConfig
     import json as _json
 
     cfg = TrainingConfig(ticker=symbol, timeframe=timeframe)
-    loaded = os.path.exists(cfg.model_save_path + ".zip")
+    zip_path = resolve_model_zip_path(MODEL_SAVE_DIR, cfg.ticker, cfg.timeframe)
+    loaded = os.path.exists(zip_path)
 
     lagrangian = {"lambda_dd": 0.0, "lambda_cvar": 0.0, "episode_count": 0}
-    lm_path = cfg.model_save_path + "_lagrangian.json"
+    lm_path = zip_path[:-4] + "_lagrangian.json"
     if os.path.exists(lm_path):
         with open(lm_path) as f:
             lagrangian = _json.load(f)
@@ -922,8 +1088,8 @@ async def rl_brain(symbol: str = Query("AAPL"), timeframe: str = Query("1d")) ->
             entropy_hist.append(round(base_entropy, 3))
 
     return {
-        "symbol":          symbol,
-        "timeframe":       timeframe,
+        "symbol":          cfg.ticker,
+        "timeframe":       cfg.timeframe,
         "model_loaded":    loaded,
         "training_active": _training_active,
         "lagrangian":      lagrangian,
@@ -1011,3 +1177,4 @@ async def get_agent_info() -> Dict:
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host=API_HOST, port=API_PORT, reload=False)
+

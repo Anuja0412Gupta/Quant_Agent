@@ -82,7 +82,7 @@ export default function AIProfitProofTab({ analysis }) {
   }, [ohlcv_bars, regime.dominant_regime, reductionPct]);
 
   // If the agent is holding cash (no action), calculate differently
-  const isFlat = Math.abs(rl_weights.effective_action || 0) < 0.05;
+  const isFlat = Math.abs(rl_weights.effective_action || 0) < 0.02;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>

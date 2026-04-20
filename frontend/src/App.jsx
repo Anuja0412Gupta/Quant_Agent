@@ -40,6 +40,13 @@ const TABS = [
 ];
 
 export default function App() {
+  const [userId, setUserId] = useState(localStorage.getItem('quant_user_id') || '');
+  const [loginInput, setLoginInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authMode, setAuthMode] = useState('login');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
   const [activeTab, setActiveTab] = useState('analyze');
   const [ticker,    setTicker]    = useState('AAPL');
   const [timeframe, setTimeframe] = useState('1d');
@@ -98,6 +105,80 @@ export default function App() {
 
   const handleKey = (e) => { if (e.key === 'Enter') handleAnalyze(); };
 
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    if (!loginInput.trim() || !passwordInput.trim()) return;
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      if (authMode === 'signup') {
+        await axios.post(`${API}/auth/signup`, { username: loginInput.trim(), password: passwordInput });
+        setUserId(loginInput.trim());
+        localStorage.setItem('quant_user_id', loginInput.trim());
+      } else {
+        await axios.post(`${API}/auth/login`, { username: loginInput.trim(), password: passwordInput });
+        setUserId(loginInput.trim());
+        localStorage.setItem('quant_user_id', loginInput.trim());
+      }
+    } catch (err) {
+      setAuthError(err.response?.data?.detail || err.message || 'Authentication failed');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setUserId('');
+    setLoginInput('');
+    setPasswordInput('');
+    localStorage.removeItem('quant_user_id');
+  };
+
+  if (!userId) {
+    return (
+      <div className="app" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <div style={{ padding: 40, background: 'var(--bg-3)', borderRadius: 16, textAlign: 'center', border: '1px solid var(--border)', maxWidth: 400, width: '100%' }}>
+          <div className="logo" style={{ marginBottom: 24, justifyContent: 'center' }}>
+            <span className="logo-icon">⚡</span>
+            <span className="logo-gradient">QuantAgent</span>
+          </div>
+          
+          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+             <button 
+                type="button" 
+                onClick={() => { setAuthMode('login'); setAuthError(''); }} 
+                style={{ flex: 1, padding: '8px', background: authMode === 'login' ? 'var(--accent-blue)' : 'var(--bg-card)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+             >Sign In</button>
+             <button 
+                type="button" 
+                onClick={() => { setAuthMode('signup'); setAuthError(''); }} 
+                style={{ flex: 1, padding: '8px', background: authMode === 'signup' ? 'var(--accent-blue)' : 'var(--bg-card)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+             >Create Account</button>
+          </div>
+
+          <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <input 
+              value={loginInput} onChange={e => setLoginInput(e.target.value)} 
+              placeholder="Username" className="ticker-input" style={{ width: '100%', padding: '12px', fontSize: 16, textAlign: 'center' }} 
+              required 
+            />
+            <input 
+              type="password"
+              value={passwordInput} onChange={e => setPasswordInput(e.target.value)} 
+              placeholder="Password" className="ticker-input" style={{ width: '100%', padding: '12px', fontSize: 16, textAlign: 'center' }} 
+              required minLength={4}
+            />
+            {authError && <div style={{ color: '#ff6b6b', fontSize: 13, fontWeight: 'bold' }}>{authError}</div>}
+            
+            <button type="submit" className="btn-analyze" style={{ padding: '12px', width: '100%', fontSize: 16 }} disabled={authLoading}>
+              {authLoading ? 'Authenticating...' : (authMode === 'login' ? 'Secure Login' : 'Register Account')}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   const price      = analysis?.current_price;
   const changeSign = (analysis?.price_change_pct ?? 0) >= 0 ? '+' : '';
   const changePct  = analysis?.price_change_pct;
@@ -116,6 +197,8 @@ export default function App() {
           <div className="statusbar">
             <div className={`status-dot ${loading ? 'loading' : ''}`} />
             <span>{loading ? 'Analyzing…' : 'Ready'}</span>
+            <span style={{ marginLeft: 16, borderLeft: '1px solid var(--border)', paddingLeft: 16, color: 'var(--text-1)' }}>👤 {userId}</span>
+            <button onClick={handleLogout} style={{ background: 'transparent', border: 'none', color: '#ff6b6b', cursor: 'pointer', marginLeft: 8, fontSize: 11, fontWeight: 'bold' }}>Logout</button>
           </div>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <input
@@ -289,7 +372,7 @@ export default function App() {
         {activeTab === 'rl' && <RLBrainTab analysis={analysis} />}
 
         {/* ── TAB 3: COMPARE ──────────────────────────────────────── */}
-        {activeTab === 'compare' && <CompareTab />}
+        {activeTab === 'compare' && <CompareTab userId={userId} />}
 
         {/* ── TAB 4: BACKTEST ─────────────────────────────────────── */}
         {activeTab === 'backtest' && <BacktestTab />}
@@ -298,7 +381,7 @@ export default function App() {
         {activeTab === 'live' && <LiveDemoTab />}
 
         {/* ── TAB 6: PAPER TRADE ──────────────────────────────────── */}
-        {activeTab === 'paper' && <PaperTradeTab currentTicker={ticker} />}
+        {activeTab === 'paper' && <PaperTradeTab currentTicker={ticker} userId={userId} />}
       </main>
     </div>
   );

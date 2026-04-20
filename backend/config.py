@@ -125,6 +125,10 @@ NEWS_API_KEY            = os.environ.get("NEWS_API_KEY", "")
 REDDIT_CLIENT_ID        = os.environ.get("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET    = os.environ.get("REDDIT_CLIENT_SECRET", "")
 
+# ── Database ──────────────────────────────────────────────────────────────────
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb+srv://smartqueue_admin:%40Ashok123@cluster0.ayenjp1.mongodb.net/smart_queue?retryWrites=true&w=majority&appName=Cluster0")
+MONGODB_DB_NAME = os.environ.get("MONGODB_DB_NAME", "quant_agent")
+
 # ── Sentiment decay half-lives (hours) ────────────────────────────────────────
 SENTIMENT_HALF_LIVES    = {
     "earnings_news":  4,
@@ -140,16 +144,16 @@ COMMISSION_RATE         = 0.001
 MAX_PARTICIPATION_RATE  = 0.10
 
 # ── RL training ───────────────────────────────────────────────────────────────
-RL_TRAIN_STEPS_DAILY    = 25_000
-RL_TRAIN_STEPS_INTRA    = 50_000
-CURRICULUM_STAGE_1      = 5_000
-CURRICULUM_STAGE_2      = 15_000
+RL_TRAIN_STEPS_DAILY    = 500_000   # was 25_000 — severely undertrained
+RL_TRAIN_STEPS_INTRA    = 200_000
+CURRICULUM_STAGE_1      = 100_000   # was 5_000
+CURRICULUM_STAGE_2      = 300_000   # was 15_000
 
 # ── Risk limits ───────────────────────────────────────────────────────────────
-CVAR_NO_TRADE_THRESHOLD = 0.04
-CVAR_REDUCE_THRESHOLD   = 0.025
-MAX_DRAWDOWN_LIMIT      = 0.20
-LAGRANGIAN_LR           = 0.01
+CVAR_NO_TRADE_THRESHOLD = 0.03    # was 0.04 — tighter CVaR improves Sharpe
+CVAR_REDUCE_THRESHOLD   = 0.02    # was 0.025
+MAX_DRAWDOWN_LIMIT      = 0.15    # was 0.20 — force model to be less risky
+LAGRANGIAN_LR           = 0.02    # was 0.01 — faster constraint adaptation
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULT_SYMBOL    = "AAPL"

@@ -4,7 +4,7 @@ import axios from 'axios';
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const INITIAL_CAPITAL = 100000;
 
-export default function PaperTradeTab({ currentTicker }) {
+export default function PaperTradeTab({ currentTicker, userId }) {
   const [portfolio, setPortfolio] = useState(null);
   const [history, setHistory] = useState([]);
 
@@ -14,6 +14,10 @@ export default function PaperTradeTab({ currentTicker }) {
   const [quotePrice, setQuotePrice] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [isTrading, setIsTrading] = useState(false);
+
+  const [tradeAnalysis, setTradeAnalysis] = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [rlApplied, setRlApplied] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -91,7 +95,7 @@ export default function PaperTradeTab({ currentTicker }) {
 
   const fetchPortfolio = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${API}/portfolio?_t=${Date.now()}`);
+      const { data } = await axios.get(`${API}/portfolio`, { params: { user_id: userId, _t: Date.now() } });
       await hydratePortfolio(data);
       setError(null);
     } catch (err) {
@@ -118,8 +122,11 @@ export default function PaperTradeTab({ currentTicker }) {
     const sym = String(tradeSymbol || '').trim().toUpperCase();
     if (!sym) {
       setQuotePrice(null);
+      setTradeAnalysis(null);
       return;
     }
+    
+    // Fetch quote
     setQuoteLoading(true);
     axios.get(`${API}/price/${sym}`, { timeout: 10000 })
       .then(({ data }) => {
@@ -131,6 +138,20 @@ export default function PaperTradeTab({ currentTicker }) {
       .finally(() => {
         if (mounted) setQuoteLoading(false);
       });
+
+    // Fetch AI Analysis Suggestion
+    setAnalysisLoading(true);
+    axios.get(`${API}/analyze/${sym}`, { params: { timeframe: '1d' }, timeout: 60000 })
+      .then(({ data }) => {
+         if (mounted) setTradeAnalysis(data);
+      })
+      .catch(() => {
+         if (mounted) setTradeAnalysis(null);
+      })
+      .finally(() => {
+         if (mounted) setAnalysisLoading(false);
+      });
+
     return () => {
       mounted = false;
     };
@@ -144,6 +165,26 @@ export default function PaperTradeTab({ currentTicker }) {
     setTradeSymbol(symbol);
     setTradeAction('SELL');
     setTradeShares(qty);
+    setRlApplied(false);
+  };
+
+  // One-click: fill the trade form from RL suggestion
+  const applyRLSuggestion = () => {
+    if (!tradeAnalysis || !portfolio) return;
+    const dir = tradeAnalysis?.rl_weights?.direction;
+    if (!dir || dir === 'FLAT') return;
+
+    const action = dir === 'LONG' ? 'BUY' : 'SELL';
+    const effectivePos = Number(tradeAnalysis?.rl_weights?.effective_position || 0);
+    // Compute the dollar amount from portfolio total value and target %
+    const targetDollar = (portfolio.total_value || 100000) * effectivePos;
+    const price = quotePrice || 1;
+    const shares = Math.max(0.0001, parseFloat((targetDollar / price).toFixed(4)));
+
+    setTradeSymbol(tradeSymbol);
+    setTradeAction(action);
+    setTradeShares(shares);
+    setRlApplied(true);
   };
 
   const handleTrade = async (e) => {
@@ -161,9 +202,10 @@ export default function PaperTradeTab({ currentTicker }) {
         symbol: tradeSymbol,
         action: tradeAction,
         quantity: parseFloat(tradeShares),
-      });
+      }, { params: { user_id: userId } });
       await fetchPortfolio();
       setTradeShares(1);
+      setRlApplied(false);
     } catch (err) {
       setError(err.response?.data?.detail || 'Trade failed');
     } finally {
@@ -222,6 +264,171 @@ export default function PaperTradeTab({ currentTicker }) {
               {portfolio.realized_pnl >= 0 ? '+' : ''}${portfolio.realized_pnl.toFixed(2)}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* AI Suggestion Panel */}
+      {tradeSymbol && (
+        <div className="card" style={{ padding: '20px', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              &#128161; AI Trading Suggestion for <span style={{ color: 'var(--accent-blue)' }}>{tradeSymbol}</span>
+            </span>
+            {analysisLoading && <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />}
+          </div>
+          
+          {!analysisLoading && tradeAnalysis ? (() => {
+            const dir = tradeAnalysis?.rl_weights?.direction;
+            const actionLabel = dir === 'LONG' ? 'BUY' : dir === 'SHORT' ? 'SELL / SHORT' : 'HOLD';
+            const actionColor = dir === 'LONG' ? 'var(--accent-green)' : dir === 'SHORT' ? 'var(--accent-red)' : 'var(--text-1)';
+            const effectivePos = Number(tradeAnalysis?.rl_weights?.effective_position || 0);
+            const targetDollar = (portfolio?.total_value || 100000) * effectivePos;
+            const price = quotePrice || 0;
+            const suggestedShares = price > 0 ? Math.max(0.0001, parseFloat((targetDollar / price).toFixed(4))) : 0;
+            const suggestedOrderValue = suggestedShares * price;
+
+            // For SELL: estimate PnL if we have a position
+            const existingPos = portfolio?.positions?.find(p => p.symbol === tradeSymbol);
+            const avgCost = existingPos?.avg_cost || 0;
+            const estimatedPnl = dir === 'SHORT' && avgCost > 0 && price > 0
+              ? (price - avgCost) * suggestedShares
+              : null;
+
+            const canTrade = dir && dir !== 'FLAT' && price > 0 && suggestedShares > 0;
+
+            return (
+              <div>
+                {/* Top summary row */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 18, marginBottom: 4 }}>
+                      Recommended Action: <strong style={{ color: actionColor }}>{actionLabel}</strong>
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
+                      Target Portfolio Allocation: <strong style={{ color: 'var(--text-1)' }}>{(effectivePos * 100).toFixed(1)}%</strong>
+                      {price > 0 && <span style={{ marginLeft: 8 }}>≈ <strong style={{ color: 'var(--text-1)' }}>${targetDollar.toFixed(2)}</strong></span>}
+                    </div>
+                  </div>
+
+                  {/* ONE-CLICK TRADE BUTTON */}
+                  {canTrade && (
+                    <button
+                      type="button"
+                      onClick={applyRLSuggestion}
+                      style={{
+                        padding: '10px 20px',
+                        borderRadius: 10,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        letterSpacing: '0.02em',
+                        background: dir === 'LONG'
+                          ? 'linear-gradient(135deg, #22c55e, #16a34a)'
+                          : 'linear-gradient(135deg, #ef4444, #b91c1c)',
+                        color: '#fff',
+                        boxShadow: dir === 'LONG'
+                          ? '0 0 16px rgba(34,197,94,0.35)'
+                          : '0 0 16px rgba(239,68,68,0.35)',
+                        transition: 'opacity 0.2s',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      ⚡ Trade with RL Suggestion
+                    </button>
+                  )}
+                </div>
+
+                {/* RL signal pills */}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, fontFamily: 'var(--mono)', marginBottom: 12 }}>
+                  <div style={{ background: 'rgba(255,255,255,0.05)', padding: '4px 10px', borderRadius: 6 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Raw RL Action: </span>
+                    <span style={{ color: tradeAnalysis?.rl_weights?.rl_action > 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                      {Number(tradeAnalysis?.rl_weights?.rl_action || 0).toFixed(4)}
+                    </span>
+                  </div>
+                  <div style={{ background: 'rgba(255,255,255,0.05)', padding: '4px 10px', borderRadius: 6 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Gate Value: </span>
+                    <span style={{ color: 'var(--text-1)' }}>{(Number(tradeAnalysis?.rl_weights?.gate_value || 1) * 100).toFixed(1)}%</span>
+                  </div>
+                  <div style={{ background: 'rgba(255,255,255,0.05)', padding: '4px 10px', borderRadius: 6 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Effective Action: </span>
+                    <span style={{ color: 'var(--accent-blue)' }}>{Number(tradeAnalysis?.rl_weights?.effective_action || 0).toFixed(4)}</span>
+                  </div>
+                </div>
+
+                {/* Pre-trade outcome preview */}
+                {canTrade && (
+                  <div style={{
+                    background: dir === 'LONG' ? 'rgba(34,197,94,0.07)' : 'rgba(239,68,68,0.07)',
+                    border: dir === 'LONG' ? '1px solid rgba(34,197,94,0.25)' : '1px solid rgba(239,68,68,0.25)',
+                    borderRadius: 10, padding: '12px 16px', marginBottom: 8,
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                      📊 Pre-Trade Outcome Preview
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+                      <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 3 }}>Suggested Shares</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--text-1)' }}>{suggestedShares.toFixed(4)}</div>
+                      </div>
+                      <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 3 }}>Order Value</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--text-1)' }}>${suggestedOrderValue.toFixed(2)}</div>
+                      </div>
+                      <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 3 }}>Entry Price</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--text-1)' }}>${price.toFixed(2)}</div>
+                      </div>
+                      {dir === 'LONG' && (
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 3 }}>Cash After Trade</div>
+                          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--mono)', color: (portfolio?.cash - suggestedOrderValue) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                            ${((portfolio?.cash || 0) - suggestedOrderValue).toFixed(2)}
+                          </div>
+                        </div>
+                      )}
+                      {dir === 'SHORT' && estimatedPnl !== null && (
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 3 }}>Est. Realized PnL</div>
+                          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--mono)', color: estimatedPnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                            {estimatedPnl >= 0 ? '+' : ''}${estimatedPnl.toFixed(2)}
+                          </div>
+                        </div>
+                      )}
+                      {dir === 'SHORT' && estimatedPnl === null && (
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 3 }}>Cash After Trade</div>
+                          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--accent-green)' }}>
+                            +${suggestedOrderValue.toFixed(2)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {dir === 'LONG' && (portfolio?.cash || 0) < suggestedOrderValue && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>
+                        ⚠️ Insufficient cash. Reduce shares or add funds.
+                      </div>
+                    )}
+                    {rlApplied && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: 'var(--accent-green)', fontWeight: 600 }}>
+                        ✅ Form pre-filled with RL values. Review below and click Submit to execute.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ fontSize: 13, color: 'var(--text-3)', fontStyle: 'italic' }}>
+                  The AI identified the current market regime as <strong style={{ color: 'var(--text-1)', fontStyle: 'normal' }}>{tradeAnalysis?.regime?.dominant_regime || 'neutral'}</strong>.{' '}
+                  {tradeAnalysis?.disagreement?.total_uncertainty > 0.5
+                    ? ' Due to high market uncertainty, position sizes have been automatically reduced for safety.'
+                    : ' Market conditions appear stable and signals are in agreement.'}
+                </div>
+              </div>
+            );
+          })() : (
+            !analysisLoading && <div style={{ fontSize: 14, color: 'var(--text-2)' }}>No analysis available for {tradeSymbol}.</div>
+          )}
         </div>
       )}
 

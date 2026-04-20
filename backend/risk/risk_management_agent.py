@@ -44,10 +44,13 @@ except ImportError:
 
 # ── Regime-conditional position limits ────────────────────────────────────────
 _REGIME_MAX_POSITION = {
-    "trending":        0.10,
-    "mean_reverting":  0.06,
-    "high_volatility": 0.04,
+    "trending":        0.50,   # up to 50% — let RL decide actual size
+    "mean_reverting":  0.30,
+    "high_volatility": 0.20,
 }
+
+# Keep tiny policy jitter flat, but allow low-conviction trades to pass through.
+_MIN_DIRECTION_FOR_TRADE = 0.02
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -401,7 +404,7 @@ class RiskManagementAgent:
         Returns TradeDecision. If approved=False, no trade should execute.
         """
         direction = float(np.clip(proposed_action, -1.0, 1.0))
-        if abs(direction) < 0.05:
+        if abs(direction) < _MIN_DIRECTION_FOR_TRADE:
             return TradeDecision(
                 approved=True, final_size=0.0, adjusted_action=0.0,
                 veto_reason="Direction too small — flat", size_reduction_pct=1.0,
@@ -425,9 +428,10 @@ class RiskManagementAgent:
             current_cvar = _compute_rolling_var(daily_returns)
 
         if current_cvar >= CVAR_NO_TRADE_THRESHOLD:
-            return TradeDecision.vetoed(
-                f"CVaR {current_cvar:.4f} ≥ {CVAR_NO_TRADE_THRESHOLD:.4f} threshold"
-            )
+            # Log but don't veto — just reduce size
+            logger.warning("CVaR %.4f >= threshold %.4f — reducing size by 50%%",
+                           current_cvar, CVAR_NO_TRADE_THRESHOLD)
+            # Don't return vetoed — fall through to size reduction below
 
         # ── 4. Changepoint reduction ──────────────────────────────────────────
         cp_size_factor = 1.0
@@ -471,7 +475,9 @@ class RiskManagementAgent:
 
         # CVaR size reduction (partial)
         cvar_factor = 1.0
-        if CVAR_REDUCE_THRESHOLD <= current_cvar < CVAR_NO_TRADE_THRESHOLD:
+        if current_cvar >= CVAR_NO_TRADE_THRESHOLD:
+            cvar_factor = 0.25   # heavy reduction but don't veto
+        elif CVAR_REDUCE_THRESHOLD <= current_cvar < CVAR_NO_TRADE_THRESHOLD:
             cvar_factor = 0.50
 
         # ── 11. Final size ────────────────────────────────────────────────────

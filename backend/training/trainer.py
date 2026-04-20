@@ -32,6 +32,7 @@ from config import (
     RL_TRAIN_STEPS_DAILY, CURRICULUM_STAGE_1, CURRICULUM_STAGE_2,
     RL_LEARNING_RATE, BACKTEST_INITIAL_CAPITAL
 )
+from utils.helpers import ensure_numpy_pickle_compat, resolve_model_zip_path
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,8 @@ class TrainingConfig:
     model_save_path:  str   = ""
 
     def __post_init__(self):
+        self.ticker = str(self.ticker).upper().strip()
+        self.timeframe = str(self.timeframe).lower().strip()
         if not self.model_save_path:
             self.model_save_path = os.path.join(
                 MODEL_SAVE_DIR, f"rl_{self.ticker}_{self.timeframe}"
@@ -388,6 +391,7 @@ class RLTrainer:
         if not _CONTRIB_OK:
             raise ImportError("sb3_contrib required")
         model_path = path or self.config.model_save_path
+        ensure_numpy_pickle_compat()
         self.model = RecurrentPPO.load(model_path)
         logger.info("Model loaded from %s", model_path)
 
@@ -424,15 +428,48 @@ def get_trainer(config: Optional[TrainingConfig] = None) -> RLTrainer:
 
 
 def load_trained_model(ticker: str = "AAPL", timeframe: str = "1d"):
-    """Load and return the trained RL model for inference."""
+    """
+    Load and return the trained RL model for inference.
+    Tries RLTrainer first (local models), then direct RecurrentPPO.load()
+    (Colab or externally trained models).
+    """
     cfg = TrainingConfig(ticker=ticker, timeframe=timeframe)
-    trainer = RLTrainer(cfg)
-    model_path = cfg.model_save_path
-    
-    # We must append .zip explicitly to avoid sb3 trying to open the directory!
-    zip_path = model_path + ".zip"
-    if os.path.exists(zip_path):
+    zip_path = resolve_model_zip_path(MODEL_SAVE_DIR, cfg.ticker, cfg.timeframe)
+    ensure_numpy_pickle_compat()
+
+    if not os.path.exists(zip_path):
+        logger.warning("No trained model found at %s — using untrained policy", zip_path)
+        return None
+
+    # Try 1: Load via RLTrainer (handles Lagrangian state restoration)
+    try:
+        trainer = RLTrainer(cfg)
         trainer.load(zip_path)
-        return trainer.model
-    logger.warning("No trained model found at %s — using untrained policy", zip_path)
+        if trainer.model is not None:
+            logger.info("Model loaded via RLTrainer: %s", zip_path)
+            return trainer.model
+    except Exception as e1:
+        logger.warning("RLTrainer.load failed (%s), trying direct load...", e1)
+
+    # Try 2: Direct RecurrentPPO.load() — works for Colab-trained models
+    if _CONTRIB_OK:
+        try:
+            from sb3_contrib import RecurrentPPO
+            ensure_numpy_pickle_compat()
+            model = RecurrentPPO.load(zip_path)
+            logger.info("Model loaded via RecurrentPPO.load(): %s", zip_path)
+            return model
+        except Exception as e2:
+            logger.warning("RecurrentPPO.load failed: %s", e2)
+
+    # Try 3: Fallback to standard PPO
+    try:
+        from stable_baselines3 import PPO
+        ensure_numpy_pickle_compat()
+        model = PPO.load(zip_path)
+        logger.info("Model loaded via PPO.load() fallback: %s", zip_path)
+        return model
+    except Exception as e3:
+        logger.error("All model load attempts failed for %s: %s", zip_path, e3)
+
     return None
