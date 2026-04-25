@@ -40,7 +40,8 @@ export default function LiveDemoTab() {
       });
       setAnalysis(an);
 
-      const { data: bt } = await axios.post(
+      // 1️⃣ Start async backtest job
+      const { data: job } = await axios.post(
         `${API}/backtest`,
         {
           symbol: ticker.toUpperCase(),
@@ -50,8 +51,21 @@ export default function LiveDemoTab() {
           initial_capital: 100000,
           use_walk_forward: true,
         },
-        { timeout: 180_000 }
+        { timeout: 15_000 }
       );
+
+      // 2️⃣ Poll until done
+      const bt = await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const { data: s } = await axios.get(
+              `${API}/backtest/status/${job.job_id}`, { timeout: 10_000 }
+            );
+            if (s.status === 'done')  { clearInterval(poll); resolve(s.result); }
+            if (s.status === 'error') { clearInterval(poll); reject(new Error(s.error)); }
+          } catch { /* blip — keep polling */ }
+        }, 5_000);
+      });
 
       let peak = 0;
       const curve = Array.isArray(bt?.equity_curve) ? bt.equity_curve : [];

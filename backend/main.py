@@ -91,6 +91,12 @@ _component_status: Dict[str, str] = {
     "portfolio_manager": "unknown",
 }
 
+# ── Backtest job store ────────────────────────────────────────────────────────
+# Keyed by job_id. Each entry: {status, progress_msg, result, error}
+# Keeps last 20 jobs in memory; old ones are pruned automatically.
+_backtest_jobs: Dict[str, Dict] = {}
+_MAX_BACKTEST_JOBS = 20
+
 
 @app.on_event("startup")
 async def startup():
@@ -593,137 +599,186 @@ async def macro_context() -> Dict:
 
 
 @app.post("/backtest", tags=["Backtest"])
-async def run_backtest_endpoint(request: BacktestRequest) -> Dict:
+async def run_backtest_endpoint(
+    background_tasks: BackgroundTasks,
+    request: BacktestRequest,
+) -> Dict:
     """
-    Walk-forward backtest + stress test. Enforces FEATURE_BURNIN_BARS.
-    Returns per-fold metrics, regime breakdown, Kyle's lambda slippage costs,
-    BHB attribution, and CV/crisis stress results.
+    Walk-forward backtest + stress test (async job).
+    Returns a job_id immediately. Poll GET /backtest/status/{job_id} for progress.
+    This avoids the Render 30-second idle-connection timeout on long computations.
     """
-    from data.data_fetcher import get_fetcher
-    from features.feature_pipeline import get_pipeline
-    from agents.market_regime_agent import run as regime_run
-    from backtest.engine import WalkForwardEngine, StressTestEngine, compute_bhb_attribution
+    global _backtest_jobs
 
-    fetcher  = get_fetcher()
-    pipeline = get_pipeline()
+    # Prune oldest jobs once limit is hit
+    if len(_backtest_jobs) >= _MAX_BACKTEST_JOBS:
+        oldest = sorted(_backtest_jobs, key=lambda k: _backtest_jobs[k].get("created_at", ""))[0]
+        _backtest_jobs.pop(oldest, None)
 
-    df = fetcher.fetch_ohlcv(request.symbol, request.timeframe)
-    test_window = request.n_folds and (len(df) - FEATURE_BURNIN_BARS) // (request.n_folds + 1) or 63
-    min_required = FEATURE_BURNIN_BARS + 252 + max(1, test_window)
-    if len(df) < min_required:
-        raise HTTPException(
-            status_code=400,
-            detail=(f"Insufficient data: {len(df)} bars. "
-                    f"Need >= {min_required} bars for walk-forward backtest.")
-        )
+    job_id = str(uuid.uuid4())[:10]
+    _backtest_jobs[job_id] = {
+        "status":       "pending",
+        "progress_msg": "Job queued — starting shortly…",
+        "result":       None,
+        "error":        None,
+        "symbol":       request.symbol,
+        "timeframe":    request.timeframe,
+        "created_at":   datetime.utcnow().isoformat(),
+    }
 
-    # Compute features
-    macro_ctx = fetcher.fetch_macro_context()
-    features_df = pipeline.compute(df, ticker=request.symbol, macro_ctx=macro_ctx)
-    features_df = features_df.fillna(0.0)
-
-    # Regime labels for breakdown
-    regime_labels = pd.Series(index=df.index, dtype=str)
-    step = max(1, len(df) // 100)  # sample every 1% of bars for speed
-    for i in range(0, len(df), step):
-        r = regime_run(df.iloc[:i + 1], ticker=request.symbol)
-        regime_labels.iloc[i] = r.dominant_regime
-    regime_labels = regime_labels.ffill().fillna("trending")
-
-    # Load trained model (if available)
-    from training.trainer import load_trained_model
-    model = load_trained_model(request.symbol, request.timeframe)
-    if model is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No trained model loaded for {request.symbol.upper()} {request.timeframe}. Upload/train a model first.",
-        )
-
-    # Walk-forward
-    engine = WalkForwardEngine(
-        train_window=252,
-        test_window=test_window,
-        initial_capital=request.initial_capital,
-    )
-
-    folds = []
-    summary = {}
-    if model is not None:
+    def _run_backtest_job(req: BacktestRequest, jid: str) -> None:
+        """Heavy computation — runs in a thread via BackgroundTasks."""
         try:
-            folds = engine.run(df, features_df, model,
-                               ticker=request.symbol, regime_labels=regime_labels)
+            import pandas as _pd
+            from data.data_fetcher import get_fetcher
+            from features.feature_pipeline import get_pipeline
+            from agents.market_regime_agent import run as regime_run
+            from backtest.engine import WalkForwardEngine, StressTestEngine, _compute_metrics
+
+            _backtest_jobs[jid]["status"] = "running"
+            _backtest_jobs[jid]["progress_msg"] = "Fetching OHLCV data…"
+
+            fetcher  = get_fetcher()
+            pipeline = get_pipeline()
+
+            df = fetcher.fetch_ohlcv(req.symbol, req.timeframe)
+            test_window  = req.n_folds and (len(df) - FEATURE_BURNIN_BARS) // (req.n_folds + 1) or 63
+            min_required = FEATURE_BURNIN_BARS + 252 + max(1, test_window)
+            if len(df) < min_required:
+                _backtest_jobs[jid]["status"] = "error"
+                _backtest_jobs[jid]["error"]  = (
+                    f"Insufficient data: {len(df)} bars. Need >= {min_required}."
+                )
+                return
+
+            _backtest_jobs[jid]["progress_msg"] = "Computing features + macro context…"
+            macro_ctx   = fetcher.fetch_macro_context()
+            features_df = pipeline.compute(df, ticker=req.symbol, macro_ctx=macro_ctx)
+            features_df = features_df.fillna(0.0)
+
+            _backtest_jobs[jid]["progress_msg"] = "Fitting HMM regime labels…"
+            regime_labels = _pd.Series(index=df.index, dtype=str)
+            step = max(1, len(df) // 100)
+            for i in range(0, len(df), step):
+                r = regime_run(df.iloc[:i + 1], ticker=req.symbol)
+                regime_labels.iloc[i] = r.dominant_regime
+            regime_labels = regime_labels.ffill().fillna("trending")
+
+            _backtest_jobs[jid]["progress_msg"] = "Loading RL model…"
+            from training.trainer import load_trained_model
+            model = load_trained_model(req.symbol, req.timeframe)
+            if model is None:
+                _backtest_jobs[jid]["status"] = "error"
+                _backtest_jobs[jid]["error"]  = (
+                    f"No trained model for {req.symbol} {req.timeframe}. Upload a model first."
+                )
+                return
+
+            _backtest_jobs[jid]["progress_msg"] = "Running walk-forward folds (this takes several minutes)…"
+            engine = WalkForwardEngine(
+                train_window=252,
+                test_window=test_window,
+                initial_capital=req.initial_capital,
+            )
+            folds   = engine.run(df, features_df, model, ticker=req.symbol, regime_labels=regime_labels)
             summary = engine.summary(folds)
-        except Exception as e:
-            logger.error("Walk-forward failed: %s", e, exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Walk-forward failed: {e}")
 
-    # Market return series for stress test
-    rets = df["Close"].pct_change().dropna()
-    stress_engine = StressTestEngine()
-    stress_results = stress_engine.run(rets)
+            _backtest_jobs[jid]["progress_msg"] = "Running stress scenarios…"
+            rets = df["Close"].pct_change().dropna()
+            stress_results = StressTestEngine().run(rets)
 
-    fold_summary = [
-        {
-            "fold":          f.fold_idx,
-            "train_bars":    f.train_end - f.train_start,
-            "test_bars":     f.test_end - f.test_start,
-            "test_sharpe":   f.test_metrics.get("sharpe", 0),
-            "test_maxdd":    f.test_metrics.get("max_drawdown", 0),
-            "test_sortino":  f.test_metrics.get("sortino", 0),
-            "test_cvar":     f.test_metrics.get("cvar_95", 0),
-            "regime_breakdown": f.regime_breakdown,
-        }
-        for f in folds
-    ]
+            fold_summary = [
+                {
+                    "fold":             f.fold_idx,
+                    "train_bars":       f.train_end  - f.train_start,
+                    "test_bars":        f.test_end   - f.test_start,
+                    "test_sharpe":      f.test_metrics.get("sharpe", 0),
+                    "test_maxdd":       f.test_metrics.get("max_drawdown", 0),
+                    "test_sortino":     f.test_metrics.get("sortino", 0),
+                    "test_cvar":        f.test_metrics.get("cvar_95", 0),
+                    "regime_breakdown": f.regime_breakdown,
+                }
+                for f in folds
+            ]
 
-    from backtest.engine import _compute_metrics
+            if folds:
+                all_rl_rets, all_rl_dates = [], []
+                for fold in folds:
+                    all_rl_rets.extend(fold.test_returns)
+                    all_rl_dates.extend(fold.test_timestamps[:len(fold.test_returns)])
+                if all_rl_rets:
+                    rl_s        = _pd.Series(all_rl_rets, index=all_rl_dates)
+                    cap_curve   = (1 + rl_s).cumprod() * req.initial_capital
+                    overall_m   = _compute_metrics(rl_s, cap_curve)
+                    overall_m["strategy"] = "rl_walk_forward"
+                    eq_curve    = cap_curve.round(2).tolist()
+                    ts          = [str(t) for t in all_rl_dates]
+                else:
+                    eq_curve  = ((1 + rets).cumprod() * req.initial_capital).round(2).tolist()
+                    ts        = [str(t) for t in rets.index.tolist()]
+                    cap_curve = _pd.Series(eq_curve, index=rets.index[:len(eq_curve)])
+                    overall_m = _compute_metrics(rets, cap_curve)
+                    overall_m["strategy"] = "buy_and_hold_fallback"
+            else:
+                eq_curve  = ((1 + rets).cumprod() * req.initial_capital).round(2).tolist()
+                ts        = [str(t) for t in rets.index.tolist()]
+                cap_curve = _pd.Series(eq_curve, index=rets.index[:len(eq_curve)])
+                overall_m = _compute_metrics(rets, cap_curve)
+                overall_m["strategy"] = "buy_and_hold_fallback"
 
-    # ── Overall metrics: aggregate RL walk-forward returns from stored fold results ──
-    # Reuse test_returns already computed by WalkForwardEngine — no re-simulation needed.
-    if folds:
-        all_rl_rets   = []
-        all_rl_dates  = []
-        for fold in folds:
-            all_rl_rets.extend(fold.test_returns)
-            all_rl_dates.extend(fold.test_timestamps[:len(fold.test_returns)])
+            _backtest_jobs[jid]["result"] = {
+                "symbol":               req.symbol,
+                "timeframe":            req.timeframe,
+                "period":               req.period,
+                "start_date":           str(df.index[0]),
+                "end_date":             str(df.index[-1]),
+                "n_bars":               len(df),
+                "burnin_bars":          FEATURE_BURNIN_BARS,
+                "overall_metrics":      overall_m,
+                "walk_forward_folds":   fold_summary,
+                "walk_forward_summary": summary,
+                "stress_test_results":  stress_results,
+                "equity_curve":         eq_curve[-252:],
+                "timestamps":           ts[-252:],
+                "model_version":        "3.0",
+            }
+            _backtest_jobs[jid]["status"]       = "done"
+            _backtest_jobs[jid]["progress_msg"] = "Complete ✓"
+            logger.info("Backtest job %s done for %s %s", jid, req.symbol, req.timeframe)
 
-        if all_rl_rets:
-            rl_rets_series = pd.Series(all_rl_rets, index=all_rl_dates)
-            rl_cap_curve   = (1 + rl_rets_series).cumprod() * request.initial_capital
-            overall_metrics = _compute_metrics(rl_rets_series, rl_cap_curve)
-            overall_metrics["strategy"] = "rl_walk_forward"
-            equity_curve = rl_cap_curve.round(2).tolist()
-            timestamps   = [str(t) for t in all_rl_dates]
-        else:
-            # Fold ran but produced no returns — fall back
-            equity_curve    = ((1 + rets).cumprod() * request.initial_capital).round(2).tolist()
-            timestamps      = [str(t) for t in rets.index.tolist()]
-            cap_curve       = pd.Series(equity_curve, index=rets.index[:len(equity_curve)])
-            overall_metrics = _compute_metrics(rets, cap_curve)
-            overall_metrics["strategy"] = "buy_and_hold_fallback"
-    else:
-        equity_curve    = ((1 + rets).cumprod() * request.initial_capital).round(2).tolist()
-        timestamps      = [str(t) for t in rets.index.tolist()]
-        cap_curve       = pd.Series(equity_curve, index=rets.index[:len(equity_curve)])
-        overall_metrics = _compute_metrics(rets, cap_curve)
-        overall_metrics["strategy"] = "buy_and_hold_fallback"
+        except Exception as exc:
+            logger.error("Backtest job %s failed: %s", jid, exc, exc_info=True)
+            _backtest_jobs[jid]["status"] = "error"
+            _backtest_jobs[jid]["error"]  = str(exc)
 
+    background_tasks.add_task(_run_backtest_job, request, job_id)
 
     return {
-        "symbol":      request.symbol,
-        "timeframe":   request.timeframe,
-        "period":      request.period,
-        "start_date":  str(df.index[0]),
-        "end_date":    str(df.index[-1]),
-        "n_bars":      len(df),
-        "burnin_bars": FEATURE_BURNIN_BARS,
-        "overall_metrics":       overall_metrics,
-        "walk_forward_folds":    fold_summary,
-        "walk_forward_summary":  summary,
-        "stress_test_results":   stress_results,
-        "equity_curve":          equity_curve[-252:],   # last year
-        "timestamps":            timestamps[-252:],
-        "model_version":         "3.0",
+        "job_id":   job_id,
+        "status":   "pending",
+        "symbol":   request.symbol,
+        "message":  "Backtest started. Poll GET /backtest/status/{job_id} for progress.",
+    }
+
+
+@app.get("/backtest/status/{job_id}", tags=["Backtest"])
+async def backtest_status(job_id: str) -> Dict:
+    """
+    Poll the status of an async backtest job.
+    Returns {status, progress_msg, result?, error?}.
+    status values: 'pending' | 'running' | 'done' | 'error'
+    """
+    job = _backtest_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return {
+        "job_id":       job_id,
+        "status":       job["status"],
+        "progress_msg": job.get("progress_msg", ""),
+        "result":       job.get("result"),
+        "error":        job.get("error"),
+        "symbol":       job.get("symbol"),
+        "timeframe":    job.get("timeframe"),
     }
 
 

@@ -33,23 +33,63 @@ const STRESS_COLORS = {
 };
 
 export default function BacktestTab() {
-  const [ticker,   setTicker]   = useState('AAPL');
-  const [timeframe,setTimeframe]= useState('1d');
-  const [backtest, setBacktest] = useState(null);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState(null);
+  const [ticker,      setTicker]      = useState('AAPL');
+  const [timeframe,   setTimeframe]   = useState('1d');
+  const [backtest,    setBacktest]    = useState(null);
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState(null);
+  const [progressMsg, setProgressMsg] = useState('');
+  const [elapsed,     setElapsed]     = useState(0);
 
   const fetchBacktest = useCallback(async () => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setBacktest(null);
+    setProgressMsg('Starting backtest job…'); setElapsed(0);
+
+    // Tick elapsed seconds while running
+    const startTs = Date.now();
+    const ticker$ = setInterval(() => setElapsed(Math.round((Date.now() - startTs) / 1000)), 1000);
+
     try {
       const period = { '1m': '7d', '5m': '60d', '15m': '60d', '1h': '730d', '1d': '5y' }[timeframe] || '5y';
-      const { data } = await axios.post(`${API}/backtest`, {
+
+      // 1️⃣  Fire-and-forget — backend returns job_id in < 1 second
+      const { data: job } = await axios.post(`${API}/backtest`, {
         symbol: ticker.toUpperCase(), timeframe, period,
-      }, { timeout: 300_000 });
-      setBacktest(data);
+      }, { timeout: 15_000 });
+
+      if (!job.job_id) throw new Error(job.detail || 'No job_id returned');
+      setProgressMsg(job.message || 'Job queued…');
+
+      // 2️⃣  Poll status every 5 seconds until done / error
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const { data: status } = await axios.get(
+              `${API}/backtest/status/${job.job_id}`, { timeout: 10_000 }
+            );
+            setProgressMsg(status.progress_msg || status.status);
+
+            if (status.status === 'done') {
+              clearInterval(poll);
+              setBacktest(status.result);
+              resolve();
+            } else if (status.status === 'error') {
+              clearInterval(poll);
+              reject(new Error(status.error || 'Backtest failed'));
+            }
+          } catch (pollErr) {
+            // Network blip — keep polling
+            console.warn('Poll blip:', pollErr.message);
+          }
+        }, 5_000);
+      });
+
     } catch (e) {
       setError(e.response?.data?.detail || e.message || 'Backtest failed');
-    } finally { setLoading(false); }
+    } finally {
+      clearInterval(ticker$);
+      setLoading(false);
+    }
   }, [ticker, timeframe]);
 
   const m       = backtest?.overall_metrics   || {};
@@ -114,7 +154,7 @@ export default function BacktestTab() {
                 boxShadow: loading ? 'none' : '0 4px 20px rgba(99,102,241,0.35)',
               }}
             >
-              {loading ? '⏳ Running (~2 min)…' : '▶ Run Backtest & Stress Test'}
+              {loading ? '⏳ Running…' : '▶ Run Backtest & Stress Test'}
             </button>
           </div>
         </div>
@@ -127,12 +167,35 @@ export default function BacktestTab() {
 
       {/* ── Loading state ─────────────────────────── */}
       {loading && (
-        <div style={{ textAlign: 'center', padding: '60px 24px', color: '#64748b' }}>
-          <div style={{ fontSize: 32, marginBottom: 16 }}>⚙️</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#94a3b8', marginBottom: 8 }}>Running Walk-Forward Backtest</div>
-          <div style={{ fontSize: 13, lineHeight: 1.8 }}>
-            Fitting HMM regime model → Training RL folds → Running stress scenarios<br />
-            This can take 2–5 minutes. Please wait…
+        <div style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 14, padding: '32px 28px', textAlign: 'center' }}>
+          <div style={{ fontSize: 36, marginBottom: 16 }}>⚙️</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#a5b4fc', marginBottom: 10 }}>
+            Running Walk-Forward Backtest
+          </div>
+          {/* Live progress bar — cycles through 6 stages */}
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+            {['Fetching data', 'Features', 'HMM fit', 'Loading model', 'Walk-forward folds', 'Stress test'].map((stage, idx) => {
+              const stages = ['Fetching','Comput','Fitting','Loading','Running','stress'];
+              const active  = stages.some(s => progressMsg.toLowerCase().includes(s.toLowerCase()) && idx === stages.findIndex(s2 => progressMsg.toLowerCase().includes(s2.toLowerCase())));
+              const done    = stages.findIndex(s => progressMsg.toLowerCase().includes(s.toLowerCase())) > idx;
+              return (
+                <div key={stage} style={{
+                  padding: '4px 12px', borderRadius: 20, fontSize: 11, fontWeight: 700,
+                  background: done ? 'rgba(0,229,160,0.15)' : active ? 'rgba(99,102,241,0.25)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${done ? 'rgba(0,229,160,0.4)' : active ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.08)'}`,
+                  color:   done ? '#00e5a0' : active ? '#a5b4fc' : '#475569',
+                  transition: 'all 0.4s ease',
+                }}>
+                  {done ? '✓ ' : active ? '⚡ ' : ''}{stage}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 13, color: '#64748b', fontFamily: 'var(--mono)', marginBottom: 8 }}>
+            {progressMsg}
+          </div>
+          <div style={{ fontSize: 12, color: '#374151' }}>
+            ⏱ {elapsed}s elapsed — typically 5–10 min on cloud
           </div>
         </div>
       )}
