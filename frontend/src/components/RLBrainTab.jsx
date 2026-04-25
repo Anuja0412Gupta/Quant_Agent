@@ -82,7 +82,7 @@ export default function RLBrainTab({ analysis, onRefreshAnalysis }) {
       const form = new FormData();
       form.append('file', uploadFile);
       const { data } = await axios.post(`${API}/rl/upload-model?symbol=${ticker}&timeframe=1d`, form,
-        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60_000 });
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 180_000 });
       setUploadStatus(data.model_ok ? 'success' : 'saved');
       setUploadMsg(data.message || 'Model uploaded');
       setModelInfo({ exists: true, symbol: ticker, size_kb: data.size_kb, modified_at: new Date().toISOString() });

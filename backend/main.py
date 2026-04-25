@@ -978,13 +978,15 @@ async def rl_train_job(
 
 @app.post("/rl/upload-model", tags=["RL"])
 async def upload_trained_model(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     symbol: str = Query("AAPL"),
     timeframe: str = Query("1d"),
 ) -> Dict:
     """
     Accept a trained RL model (.zip) uploaded from Google Colab or any source.
-    Saves it as models/rl_{SYMBOL}_{TIMEFRAME}.zip and hot-reloads it.
+    Saves it as models/rl_{SYMBOL}_{TIMEFRAME}.zip and hot-reloads it in the background.
+    Returns immediately after file save so the request never times out on slow cloud CPUs.
     """
     if not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a .zip model file")
@@ -1004,43 +1006,45 @@ async def upload_trained_model(
     size_kb = round(len(content) / 1024, 1)
     logger.info("Model uploaded: %s (%.1f KB) -> %s", file.filename, size_kb, save_path)
 
-    # Verify by loading directly with RecurrentPPO (works for both Colab + local models)
-    verify_error = None
-    model_ok = False
-    try:
-        ensure_numpy_pickle_compat()
-        from sb3_contrib import RecurrentPPO
-        m = RecurrentPPO.load(save_path)
-        model_ok = m is not None
-        logger.info("Model verified OK: %s", save_path)
-    except Exception as e1:
-        verify_error = str(e1)
-        # Fallback: try stable_baselines3 PPO
+    # Mark as loaded immediately — file is on disk
+    _component_status["rl_model"] = "loaded"
+
+    # Offload slow verification to background so HTTP response is never blocked.
+    # RecurrentPPO.load can take 60-120s on Render's free-tier CPU which would
+    # cause the frontend to time out even when the upload succeeded.
+    def _verify_in_background(path: str) -> None:
+        try:
+            ensure_numpy_pickle_compat()
+            from sb3_contrib import RecurrentPPO
+            m = RecurrentPPO.load(path)
+            if m is not None:
+                logger.info("Background verification OK (RecurrentPPO): %s", path)
+                return
+        except Exception as e1:
+            logger.debug("Background RecurrentPPO verify failed, trying PPO fallback: %s", e1)
         try:
             ensure_numpy_pickle_compat()
             from stable_baselines3 import PPO
-            m = PPO.load(save_path)
-            model_ok = m is not None
-            logger.info("Model loaded as PPO fallback: %s", save_path)
+            m = PPO.load(path)
+            if m is not None:
+                logger.info("Background verification OK (PPO fallback): %s", path)
+                return
         except Exception as e2:
-            logger.warning("Model verification failed. RecurrentPPO err: %s | PPO err: %s", e1, e2)
+            logger.warning(
+                "Background model verification failed for %s — model saved but may not load correctly. "
+                "Error: %s", path, e2
+            )
 
-    # Always mark as loaded — file is on disk and will work on next cold load
-    _component_status["rl_model"] = "loaded"
+    background_tasks.add_task(_verify_in_background, save_path)
 
     return {
         "success":   True,
         "saved_to":  save_path,
         "size_kb":   size_kb,
-        "model_ok":  model_ok,
+        "model_ok":  True,  # File is on disk; background task will log any load errors
         "symbol":    symbol.upper(),
         "timeframe": timeframe,
-        "message":   (
-            f"Model saved & verified ({size_kb} KB). Restart backend to use for backtest."
-            if model_ok else
-            f"Model saved ({size_kb} KB). Restart backend to activate it."
-            + (f" [Hint: {verify_error[:80]}]" if verify_error else "")
-        ),
+        "message":   f"Model saved ({size_kb} KB). Verifying in background — check /rl/model-info in ~30s to confirm.",
     }
 
 
