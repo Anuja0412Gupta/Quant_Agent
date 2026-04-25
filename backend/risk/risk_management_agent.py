@@ -404,29 +404,59 @@ class RiskManagementAgent:
         Returns TradeDecision. If approved=False, no trade should execute.
         """
         direction = float(np.clip(proposed_action, -1.0, 1.0))
+
+        # Pre-compute risk metrics for dashboard visibility
+        current_cvar = 0.0
+        if daily_returns is not None and len(daily_returns) >= 20:
+            current_cvar = _compute_rolling_var(daily_returns)
+            
+        kelly_f = self._compute_kelly_fraction(daily_returns)
+        
+        sl_direction = direction if abs(direction) > 0.001 else 1.0
+        atr_sl = atr * 1.5
+        atr_tp = atr * 3.0
+        if sl_direction > 0:
+            stop_loss   = price - atr_sl
+            take_profit = price + atr_tp
+        else:
+            stop_loss   = price + atr_sl
+            take_profit = price - atr_tp
+
         if abs(direction) < _MIN_DIRECTION_FOR_TRADE:
             return TradeDecision(
                 approved=True, final_size=0.0, adjusted_action=0.0,
                 veto_reason="Direction too small — flat", size_reduction_pct=1.0,
+                kelly_fraction=round(kelly_f, 4),
+                current_cvar=round(current_cvar, 6),
+                stop_loss=round(stop_loss, 4),
+                take_profit=round(take_profit, 4),
             )
 
         # ── 1. SEC blackout ───────────────────────────────────────────────────
         if sec_flags is not None and sec_flags.recent_8k:
-            return TradeDecision.vetoed(
-                f"SEC 8-K filed {sec_flags.days_since_last_8k} days ago — blackout"
+            return TradeDecision(
+                approved=False, final_size=0.0, adjusted_action=0.0,
+                veto_reason=f"SEC 8-K filed {sec_flags.days_since_last_8k} days ago — blackout",
+                size_reduction_pct=1.0,
+                kelly_fraction=round(kelly_f, 4),
+                current_cvar=round(current_cvar, 6),
+                stop_loss=round(stop_loss, 4),
+                take_profit=round(take_profit, 4),
             )
 
         # ── 2. Max drawdown circuit breaker ───────────────────────────────────
         if current_drawdown >= MAX_DRAWDOWN_LIMIT:
-            return TradeDecision.vetoed(
-                f"Max drawdown {current_drawdown:.1%} ≥ {MAX_DRAWDOWN_LIMIT:.1%} limit"
+            return TradeDecision(
+                approved=False, final_size=0.0, adjusted_action=0.0,
+                veto_reason=f"Max drawdown {current_drawdown:.1%} ≥ {MAX_DRAWDOWN_LIMIT:.1%} limit",
+                size_reduction_pct=1.0,
+                kelly_fraction=round(kelly_f, 4),
+                current_cvar=round(current_cvar, 6),
+                stop_loss=round(stop_loss, 4),
+                take_profit=round(take_profit, 4),
             )
 
         # ── 3. CVaR check ─────────────────────────────────────────────────────
-        current_cvar = 0.0
-        if daily_returns is not None and len(daily_returns) >= 20:
-            current_cvar = _compute_rolling_var(daily_returns)
-
         if current_cvar >= CVAR_NO_TRADE_THRESHOLD:
             # Log but don't veto — just reduce size
             logger.warning("CVaR %.4f >= threshold %.4f — reducing size by 50%%",
@@ -445,7 +475,7 @@ class RiskManagementAgent:
         regime_max = _REGIME_MAX_POSITION.get(dominant_regime, MAX_POSITION_PCT)
 
         # ── 6. Fractional Kelly sizing ────────────────────────────────────────
-        kelly_f = self._compute_kelly_fraction(daily_returns)
+        # (kelly_f precomputed)
 
         # ── 7. Base position size = Kelly × regime_max ────────────────────────
         base_size = kelly_f * regime_max
@@ -492,14 +522,7 @@ class RiskManagementAgent:
         size_reduction = 1.0 - (final_size / (regime_max + 1e-8))
 
         # ── 12. Stop loss / take profit via ATR ───────────────────────────────
-        atr_sl = atr * 1.5
-        atr_tp = atr * 3.0
-        if direction > 0:
-            stop_loss   = price - atr_sl
-            take_profit = price + atr_tp
-        else:
-            stop_loss   = price + atr_sl
-            take_profit = price - atr_tp
+        # (stop_loss and take_profit precomputed)
 
         logger.info(
             "Risk eval: regime=%s kelly=%.3f ep=%.3f cvar=%.4f "

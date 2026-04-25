@@ -1,3 +1,4 @@
+/* c:\Users\Anuja\Desktop\QUANT\frontend\src\components\AISuggestionsTab.jsx */
 import React from 'react';
 
 export default function AISuggestionsTab({ analysis }) {
@@ -14,93 +15,132 @@ export default function AISuggestionsTab({ analysis }) {
   // Extract variables
   const ticker = analysis.symbol;
   const currentPrice = analysis.current_price;
-  const regime = analysis.regime?.dominant_regime || 'Unknown';
+  const regime = analysis.regime?.regime || analysis.active_regime || 'Unknown';
   const regimeConf = analysis.regime?.confidence || 0;
   const sentimentScore = analysis.sentiment?.ticker_sentiment_score || 0;
-  const newsSentimentWord = getSentimentWord(sentimentScore);
-  const action = analysis.rl_weights?.direction || 'NO TRADE';
+  const action = analysis.rl_weights?.direction || 'FLAT';
+  
+  // Math logic extraction
   const rlActionWeight = typeof analysis.rl_weights?.rl_action === 'number' ? analysis.rl_weights.rl_action : 0;
   const actionIntensity = Math.abs(rlActionWeight);
-  const signalAgreement = 1 - (analysis.disagreement?.total_uncertainty || 0);
+  const positionScale = (analysis.rl_weights?.effective_position * 100 || 0).toFixed(1);
+  const signalAgreement = analysis.disagreement?.agent_consensus || (1 - (analysis.disagreement?.total_uncertainty || 0));
 
-  // Generate plain-english paragraphs
-  const getActionIntensityText = (val) => {
-    if (val > 0.75) return "very strongly recommends";
-    if (val > 0.4) return "recommends";
-    if (val > 0.15) return "weakly suggests";
-    return "has no strong suggestion to";
-  };
-
-  const getConfidenceLevel = (val) => {
-    if (val > 0.8) return "High Confidence";
-    if (val > 0.5) return "Medium Confidence";
-    return "Low Confidence";
-  };
-
+  // Labels
   function getSentimentWord(score) {
-    if (score >= 0.25) return "Positive";
-    if (score >= 0.1) return "Slightly Positive";
-    if (score <= -0.25) return "Negative";
-    if (score <= -0.1) return "Slightly Negative";
-    return "Neutral";
+    if (score >= 0.25) return { word: "Positive", color: "#4ade80", icon: "☀️" };
+    if (score >= 0.1) return { word: "Slightly Positive", color: "#86efac", icon: "🌤️" };
+    if (score <= -0.25) return { word: "Negative", color: "#f87171", icon: "⛈️" };
+    if (score <= -0.1) return { word: "Slightly Negative", color: "#fca5a5", icon: "🌧️" };
+    return { word: "Neutral", color: "#94a3b8", icon: "☁️" };
+  }
+  
+  const sentiment = getSentimentWord(sentimentScore);
+  
+  const getRegimeDetails = (r) => {
+    if (r === 'trending') return { icon: "📈", desc: "The stock is riding a strong momentum wave.", color: "#4ade80" };
+    if (r === 'mean_reverting') return { icon: "↕️", desc: "The stock is bouncing sideways in a range.", color: "#60a5fa" };
+    if (r === 'high_volatility') return { icon: "🌪️", desc: "Turbulent, unpredictable price swings.", color: "#f87171" };
+    return { icon: "📊", desc: "Standard market conditions.", color: "#94a3b8" };
+  };
+  const regimeData = getRegimeDetails(regime);
+
+  // Verdict config
+  let verdictColor = "var(--text-1)";
+  let verdictLabel = "HOLD / FLAT";
+  let verdictIcon = "⚖️";
+  if (action === 'LONG' || action === 'BUY') {
+    verdictColor = "#00e5a0";
+    verdictLabel = "BUY POSITION";
+    verdictIcon = "🚀";
+  } else if (action === 'SHORT' || action === 'SELL') {
+    verdictColor = "#ff4f72";
+    verdictLabel = "SELL POSITION";
+    verdictIcon = "🔻";
   }
 
-  const recommendationColor =
-    action === 'LONG' ? 'var(--accent-green)' : action === 'SHORT' ? 'var(--accent-red)' : 'var(--text-1)';
-
   return (
-    <div className="ai-suggestions-tab" style={{ maxWidth: 800, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div className="card" style={{ padding: 32 }}>
-        <h2 style={{ marginBottom: 8, color: 'var(--text-1)' }}>
-          AI Trading Suggestion for <span style={{ color: 'var(--accent-blue)' }}>{ticker}</span>
-        </h2>
-        <p style={{ fontSize: 16, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 24 }}>
-          This page breaks down exactly why the AI made its decision, skipping the complex math.
-        </p>
+    <div className="suggestion-dashboard">
+      <div className="suggestion-header">
+        <div className="sh-left">
+          <h2 className="sh-title">AI Trading Plan for {ticker}</h2>
+          <p className="sh-subtitle">Simplified breakdown of the agent's logic for human review.</p>
+        </div>
+        <div className="sh-price">${currentPrice?.toFixed(2)}</div>
+      </div>
 
-        <div style={{ background: 'var(--bg-3)', padding: 24, borderRadius: 12, border: '1px solid var(--border)' }}>
-          <h3 style={{ marginBottom: 16, fontSize: 20 }}>
-            Conclusion: <span style={{ color: recommendationColor, fontWeight: 'bold' }}>{action.replace('LONG', 'BUY')}</span>
-          </h3>
-
-          <p style={{ fontSize: 16, lineHeight: 1.8, color: 'var(--text-1)' }}>
-             The AI <strong>{getActionIntensityText(actionIntensity)}</strong> taking a <strong>{action.replace('LONG', 'BUY')}</strong> position on {ticker} at the current price of ${currentPrice?.toFixed(2)}. 
-             This decision is rated with <strong>{getConfidenceLevel(signalAgreement)}</strong> because the underlying signals {(signalAgreement > 0.6) ? 'mostly agree with each other' : 'are somewhat conflicting'}.
+      <div className="verdict-banner glass-panel" style={{ borderLeft: `6px solid ${verdictColor}` }}>
+        <div className="verdict-icon">{verdictIcon}</div>
+        <div className="verdict-content">
+          <div className="verdict-label">FINAL VERDICT</div>
+          <div className="verdict-action" style={{ color: verdictColor }}>{verdictLabel}</div>
+          <p className="verdict-desc">
+            The AI recommends {action === 'FLAT' ? 'staying completely out of the market' : <span style={{color: verdictColor}}>{verdictLabel}</span>} for {ticker}. 
+            It has sized the portfolio allocation to exactly <strong style={{color: '#fff'}}>{positionScale}%</strong> based on current mathematical risk parameters.
           </p>
         </div>
       </div>
 
-      <div className="card" style={{ padding: 32 }}>
-        <h3 style={{ marginBottom: 16, fontSize: 18, color: 'var(--text-1)' }}>How did it reach this conclusion?</h3>
-        
-        <ul style={{ listStyleType: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <li style={{ background: 'rgba(255,255,255,0.03)', padding: 16, borderRadius: 8 }}>
-            <strong style={{ display: 'block', fontSize: 15, marginBottom: 4, color: 'var(--accent-blue)' }}>1. Market Environment (Regime)</strong>
-            <span style={{ color: 'var(--text-2)', fontSize: 15, lineHeight: 1.5 }}>
-              The AI identified the current market environment for {ticker} as <strong>{regime}</strong> (with {(regimeConf * 100).toFixed(0)}% certainty). 
-              {regime === 'trending' && ' This means the stock is currently riding a wave, and the AI prefers to follow the trend rather than bet against it.'}
-              {regime === 'mean_reverting' && ' This means the stock is moving sideways within a range, so the AI will try to buy low and sell high within that specific range.'}
-              {regime === 'volatile' && ' This means the stock is experiencing high turbulence, causing the AI to be more cautious and reduce trade sizes to protect your capital.'}
-            </span>
-          </li>
+      <h3 className="section-title mt-32 mb-16">The 3 Pillars of this Decision</h3>
+      
+      <div className="pillars-grid">
+        {/* Pillar 1: Regime */}
+        <div className="pillar-card glass-panel">
+          <div className="pillar-header">
+            <span className="pillar-emoji">{regimeData.icon}</span>
+            <span className="pillar-title">Market Regime</span>
+          </div>
+          <div className="pillar-value" style={{ color: regimeData.color }}>
+            {regime.replace('_', ' ').toUpperCase()}
+          </div>
+          <div className="progress-bar-container">
+            <div className="progress-label"><span>AI Confidence</span> <span>{(regimeConf * 100).toFixed(0)}%</span></div>
+            <div className="progress-track"><div className="progress-fill" style={{ width: `${(regimeConf * 100).toFixed(0)}%`, background: regimeData.color }}></div></div>
+          </div>
+          <p className="pillar-desc">{regimeData.desc}</p>
+        </div>
 
-          <li style={{ background: 'rgba(255,255,255,0.03)', padding: 16, borderRadius: 8 }}>
-            <strong style={{ display: 'block', fontSize: 15, marginBottom: 4, color: 'var(--accent-green)' }}>2. News & Social Sentiment</strong>
-            <span style={{ color: 'var(--text-2)', fontSize: 15, lineHeight: 1.5 }}>
-              By analyzing thousands of recent news headlines and Reddit discussions, the AI calculated that the overall public sentiment is <strong>{newsSentimentWord}</strong>. 
-              {newsSentimentWord.includes('Positive') && ' Good news usually provides a tailwind that supports a Buy decision.'}
-              {newsSentimentWord.includes('Negative') && ' Bad news creates a headwind, leading the AI to be cautious or recommend Selling.'}
-              {newsSentimentWord.includes('Neutral') && ' The news isn\'t heavily swaying the stock right now, so the AI is relying mostly on price patterns.'}
-            </span>
-          </li>
+        {/* Pillar 2: Sentiment */}
+        <div className="pillar-card glass-panel">
+          <div className="pillar-header">
+            <span className="pillar-emoji">{sentiment.icon}</span>
+            <span className="pillar-title">News Sentiment</span>
+          </div>
+          <div className="pillar-value" style={{ color: sentiment.color }}>
+            {sentiment.word.toUpperCase()}
+          </div>
+          <div className="progress-bar-container">
+             <div className="progress-label"><span>Polarity Score</span> <span>{sentimentScore.toFixed(2)}</span></div>
+             <div className="progress-track">
+               <div className="progress-fill" style={{ width: `${Math.max(5, Math.abs(sentimentScore * 100))}%`, background: sentiment.color }}></div>
+             </div>
+          </div>
+          <p className="pillar-desc">
+            {sentimentScore > 0 ? 'Positive headlines act as a tailwind.' : sentimentScore < 0 ? 'Negative news acts as a headwind.' : 'News media is largely un-opinionated right now.'}
+          </p>
+        </div>
 
-          <li style={{ background: 'rgba(255,255,255,0.03)', padding: 16, borderRadius: 8 }}>
-            <strong style={{ display: 'block', fontSize: 15, marginBottom: 4, color: 'var(--accent-purple)' }}>3. Risk & Protection</strong>
-            <span style={{ color: 'var(--text-2)', fontSize: 15, lineHeight: 1.5 }}>
-              Even if a trade looks great, the AI scales the trade size to protect your money. Based on recent volatility and disagreement among the AI's internal sub-agents, it decided to use a <strong>position scaling of {(analysis.rl_weights?.effective_position * 100 || 0).toFixed(1)}%</strong> for this trade.
-            </span>
-          </li>
-        </ul>
+        {/* Pillar 3: AI Agreement */}
+        <div className="pillar-card glass-panel">
+          <div className="pillar-header">
+            <span className="pillar-emoji">🤝</span>
+            <span className="pillar-title">Model Agreement</span>
+          </div>
+          <div className="pillar-value" style={{ color: signalAgreement > 0.6 ? '#4ade80' : '#fbbf24' }}>
+            {signalAgreement > 0.6 ? 'STRONG ALIGNMENT' : 'CONFLICTING SIGNALS'}
+          </div>
+          <div className="progress-bar-container">
+            <div className="progress-label"><span>Consensus Matrix</span> <span>{(signalAgreement * 100).toFixed(0)}%</span></div>
+            <div className="progress-track">
+               <div className="progress-fill" style={{ width: `${(signalAgreement * 100).toFixed(0)}%`, background: signalAgreement > 0.6 ? '#4ade80' : '#fbbf24' }}></div>
+            </div>
+          </div>
+          <p className="pillar-desc">
+            {signalAgreement > 0.6 
+              ? 'Most technical indicators and sub-agents agree on the direction.' 
+              : 'Different agents are disagreeing. The AI has reduced sizing to match this risk.'}
+          </p>
+        </div>
       </div>
     </div>
   );

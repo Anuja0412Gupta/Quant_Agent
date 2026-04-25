@@ -1,28 +1,27 @@
 /**
- * MacroPanel v3.0
- * =================
- * Displays macro context: VIX regime, credit spread, DXY momentum,
- * yield curve spread, and Fed funds rate.
+ * MacroPanel v4.0 — Clean, easy-to-read macro data tiles
  */
 import React from 'react';
 
-function MacroStat({ label, value, unit = '', color, description }) {
-  return (
-    <div className="macro-stat">
-      <div className="macro-stat-label">{label}</div>
-      <div className="macro-stat-value" style={{ color }}>
-        {typeof value === 'number' ? value.toFixed(2) : value}{unit}
-      </div>
-      {description && <div className="macro-stat-desc">{description}</div>}
-    </div>
-  );
-}
+function StatTile({ label, value, unit = '', color, badges = [] }) {
+  const display = typeof value === 'number'
+    ? `${value.toFixed(2)}${unit}`
+    : (value ?? '—');
 
-function CreditAlert({ ratio, threshold = 0 }) {
-  const isRisk = ratio < threshold;
   return (
-    <div className={`credit-alert ${isRisk ? 'alert-danger' : 'alert-ok'}`}>
-      <span>{isRisk ? '⚠ Credit stress detected' : '✓ Credit stable'}</span>
+    <div style={{
+      background: 'rgba(255,255,255,0.03)',
+      borderRadius: 10,
+      padding: '12px 14px',
+      border: '1px solid rgba(255,255,255,0.05)',
+    }}>
+      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: color || '#f1f5f9', fontFamily: 'var(--mono)' }}>
+        {display}
+      </div>
+      {badges.map((b, i) => (
+        <div key={i} style={{ marginTop: 6, fontSize: 11, color: b.color || '#64748b' }}>{b.text}</div>
+      ))}
     </div>
   );
 }
@@ -30,82 +29,65 @@ function CreditAlert({ ratio, threshold = 0 }) {
 export default function MacroPanel({ macro }) {
   if (!macro) {
     return (
-      <div className="card macro-card">
-        <div className="card-header">
-          <span className="card-icon">🌍</span>
-          <h3>Macro Context</h3>
-        </div>
-        <div className="no-data">Run analysis to see macro data</div>
+      <div className="card" style={{ minHeight: 150, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ color: '#475569' }}>🌍 Run analysis to see macro data</span>
       </div>
     );
   }
 
-  const vixColor = macro.vix_level > 30 ? '#f87171'
-                 : macro.vix_level > 20 ? '#facc15'
-                 : '#4ade80';
-
-  const yieldColor = macro.t10y2y_spread < 0 ? '#f87171'
-                   : macro.t10y2y_spread < 0.5 ? '#facc15'
-                   : '#4ade80';
-
-  const dxyColor = macro.dxy_20d_momentum > 0.02  ? '#f87171'   // strong dollar bad for risk
-                 : macro.dxy_20d_momentum < -0.02 ? '#4ade80'   // weak dollar good
-                 : '#94a3b8';
+  const vixColor = macro.vix_level > 30 ? '#ff4f72' : macro.vix_level > 20 ? '#ffb830' : '#00e5a0';
+  const yieldColor = macro.t10y2y_spread < 0 ? '#ff4f72' : macro.t10y2y_spread < 0.5 ? '#ffb830' : '#00e5a0';
+  const dxyColor = macro.dxy_20d_momentum > 0.02 ? '#ff4f72' : macro.dxy_20d_momentum < -0.02 ? '#00e5a0' : '#94a3b8';
+  const creditRisk = macro.hyg_lqd_zscore < -1.5;
 
   return (
-    <div className="card macro-card">
-      <div className="card-header">
-        <span className="card-icon">🌍</span>
-        <h3>Macro Context</h3>
+    <div className="card">
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>MACRO CONTEXT</div>
         {macro.freshness_ts && (
-          <span className="macro-freshness">
-            Updated: {new Date(macro.freshness_ts).toLocaleTimeString()}
-          </span>
+          <div style={{ fontSize: 12, color: '#475569' }}>
+            Updated {new Date(macro.freshness_ts).toLocaleTimeString()}
+          </div>
         )}
       </div>
 
-      {/* VIX section */}
-      <div className="macro-section">
-        <div className="macro-section-title">Volatility Term Structure</div>
-        <div className="macro-stats-row">
-          <MacroStat label="VIX"      value={macro.vix_level}      color={vixColor} description="1M realized vol" />
-          <MacroStat label="VIX 9D"   value={macro.vix9d_level}    color={vixColor} description="Short-term vol" />
-          <MacroStat label="TS Spread" value={macro.vix_ts_spread}  unit="" color={
-            macro.vix_ts_spread < 0 ? '#f87171' : '#4ade80'
-          } description="VIX9D−VIX (backwardation<0)" />
-          <MacroStat label="VIX Z"    value={macro.vix_zscore}     unit="σ" color={vixColor} />
-        </div>
+      {/* Volatility */}
+      <div style={{ fontSize: 12, color: '#64748b', fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>VOLATILITY</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
+        <StatTile label="VIX" value={macro.vix_level} color={vixColor}
+          badges={macro.vix_level > 30 ? [{ text: '⚠ Fear Elevated', color: '#ff4f72' }] : []} />
+        <StatTile label="VIX 9D" value={macro.vix9d_level} color={vixColor} />
+        <StatTile label="Term Spread" value={macro.vix_ts_spread}
+          color={macro.vix_ts_spread < 0 ? '#ff4f72' : '#00e5a0'}
+          badges={[{ text: macro.vix_ts_spread < 0 ? 'Backwardation' : 'Contango', color: macro.vix_ts_spread < 0 ? '#ff4f72' : '#64748b' }]} />
+        <StatTile label="VIX Z-Score" value={macro.vix_zscore} unit="σ" color={vixColor} />
       </div>
 
-      {/* Credit section */}
-      <div className="macro-section">
-        <div className="macro-section-title">Credit Markets</div>
-        <div className="macro-stats-row">
-          <MacroStat label="HYG/LQD"    value={macro.hyg_lqd_ratio}  color={
-            macro.credit_regime_flag === 1 ? '#f87171' : '#4ade80'
-          } description="High yield vs inv-grade" />
-          <MacroStat label="HYG Z"      value={macro.hyg_lqd_zscore} unit="σ" color={
-            macro.hyg_lqd_zscore < -1.5 ? '#f87171' : '#94a3b8'
-          } />
-          <MacroStat label="HY Spread"  value={macro.hy_credit_spread} unit="bps" color={
-            macro.hy_credit_spread > 500 ? '#f87171' : '#94a3b8'
-          } description="HY−IG spread" />
+      {/* Credit */}
+      <div style={{ fontSize: 12, color: '#64748b', fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>CREDIT MARKETS</div>
+      {creditRisk && (
+        <div style={{ padding: '10px 14px', background: 'rgba(255,79,114,0.1)', border: '1px solid rgba(255,79,114,0.3)', borderRadius: 10, fontSize: 13, color: '#ff4f72', marginBottom: 12, fontWeight: 600 }}>
+          ⚠ Credit stress detected — HYG/LQD z-score at {macro.hyg_lqd_zscore?.toFixed(2)}σ
         </div>
-        <CreditAlert ratio={macro.hyg_lqd_zscore} threshold={-1.5} />
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
+        <StatTile label="HYG/LQD Ratio" value={macro.hyg_lqd_ratio}
+          color={creditRisk ? '#ff4f72' : '#00e5a0'} />
+        <StatTile label="HYG Z-Score" value={macro.hyg_lqd_zscore} unit="σ"
+          color={creditRisk ? '#ff4f72' : '#94a3b8'} />
+        <StatTile label="HY Spread" value={macro.hy_credit_spread} unit=" bps"
+          color={macro.hy_credit_spread > 500 ? '#ff4f72' : '#94a3b8'} />
       </div>
 
-      {/* Rates section */}
-      <div className="macro-section">
-        <div className="macro-section-title">Fixed Income & FX</div>
-        <div className="macro-stats-row">
-          <MacroStat label="10Y−2Y"    value={macro.t10y2y_spread}   unit="%" color={yieldColor}
-            description={macro.t10y2y_spread < 0 ? '⚠ Inverted yield curve' : 'Normal curve'} />
-          <MacroStat label="Fed Funds" value={macro.fed_funds_rate}  unit="%" color="#94a3b8" />
-          <MacroStat label="DXY 20D"   value={(macro.dxy_20d_momentum * 100)} unit="%" color={dxyColor}
-            description="USD 20-day momentum" />
-          <MacroStat label="Consumer" value={macro.consumer_sentiment} color="#94a3b8"
-            description="UMich sentiment" />
-        </div>
+      {/* Rates & FX */}
+      <div style={{ fontSize: 12, color: '#64748b', fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>RATES & FX</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+        <StatTile label="10Y−2Y Spread" value={macro.t10y2y_spread} unit="%" color={yieldColor}
+          badges={[{ text: macro.t10y2y_spread < 0 ? '⚠ Inverted' : 'Normal', color: yieldColor }]} />
+        <StatTile label="Fed Funds" value={macro.fed_funds_rate} unit="%" color="#94a3b8" />
+        <StatTile label="DXY Momentum" value={(macro.dxy_20d_momentum || 0) * 100} unit="%" color={dxyColor}
+          badges={[{ text: macro.dxy_20d_momentum > 0.02 ? '$ Strong (risk-off)' : macro.dxy_20d_momentum < -0.02 ? '$ Weak (risk-on)' : '$ Neutral', color: dxyColor }]} />
+        <StatTile label="Consumer Sent." value={macro.consumer_sentiment} color="#94a3b8" />
       </div>
     </div>
   );

@@ -5,7 +5,7 @@
  * the OHLCV chart, agent signals, trade decision, and SHAP.
  * All v3.0 API fields wired through.
  */
-import { useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import axios from 'axios';
 import CandlestickChart    from './components/CandlestickChart';
 import AgentSignals        from './components/AgentSignals';
@@ -24,7 +24,26 @@ import LiveDemoTab         from './components/LiveDemoTab';
 import PaperTradeTab       from './components/PaperTradeTab';
 import AISuggestionsTab    from './components/AISuggestionsTab';
 import AIProfitProofTab    from './components/AIProfitProofTab';
+import LandingPage         from './components/LandingPage';
 import './index.css';
+
+/** Error boundary — catches component crashes so the full page never goes blank */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(err, info) { console.error('[ErrorBoundary]', err, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 24, background: 'rgba(255,79,114,0.08)', border: '1px solid rgba(255,79,114,0.3)', borderRadius: 12, color: '#ff4f72', fontSize: 13, fontFamily: 'monospace' }}>
+          ⚠️ Component error: {this.state.error?.message || 'Unknown error'}
+          <button onClick={() => this.setState({ hasError: false, error: null })} style={{ marginLeft: 16, padding: '4px 12px', background: 'rgba(255,79,114,0.2)', border: '1px solid rgba(255,79,114,0.4)', borderRadius: 6, color: '#ff4f72', cursor: 'pointer', fontSize: 12 }}>Retry</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const TIMEFRAMES = ['1d', '1h', '15m'];
@@ -41,11 +60,6 @@ const TABS = [
 
 export default function App() {
   const [userId, setUserId] = useState(localStorage.getItem('quant_user_id') || '');
-  const [loginInput, setLoginInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [authMode, setAuthMode] = useState('login');
-  const [authError, setAuthError] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
 
   const [activeTab, setActiveTab] = useState('analyze');
   const [ticker,    setTicker]    = useState('AAPL');
@@ -105,78 +119,13 @@ export default function App() {
 
   const handleKey = (e) => { if (e.key === 'Enter') handleAnalyze(); };
 
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    if (!loginInput.trim() || !passwordInput.trim()) return;
-    setAuthLoading(true);
-    setAuthError('');
-    try {
-      if (authMode === 'signup') {
-        await axios.post(`${API}/auth/signup`, { username: loginInput.trim(), password: passwordInput });
-        setUserId(loginInput.trim());
-        localStorage.setItem('quant_user_id', loginInput.trim());
-      } else {
-        await axios.post(`${API}/auth/login`, { username: loginInput.trim(), password: passwordInput });
-        setUserId(loginInput.trim());
-        localStorage.setItem('quant_user_id', loginInput.trim());
-      }
-    } catch (err) {
-      setAuthError(err.response?.data?.detail || err.message || 'Authentication failed');
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
   const handleLogout = () => {
     setUserId('');
-    setLoginInput('');
-    setPasswordInput('');
     localStorage.removeItem('quant_user_id');
   };
 
   if (!userId) {
-    return (
-      <div className="app" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <div style={{ padding: 40, background: 'var(--bg-3)', borderRadius: 16, textAlign: 'center', border: '1px solid var(--border)', maxWidth: 400, width: '100%' }}>
-          <div className="logo" style={{ marginBottom: 24, justifyContent: 'center' }}>
-            <span className="logo-icon">⚡</span>
-            <span className="logo-gradient">QuantAgent</span>
-          </div>
-          
-          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-             <button 
-                type="button" 
-                onClick={() => { setAuthMode('login'); setAuthError(''); }} 
-                style={{ flex: 1, padding: '8px', background: authMode === 'login' ? 'var(--accent-blue)' : 'var(--bg-card)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-             >Sign In</button>
-             <button 
-                type="button" 
-                onClick={() => { setAuthMode('signup'); setAuthError(''); }} 
-                style={{ flex: 1, padding: '8px', background: authMode === 'signup' ? 'var(--accent-blue)' : 'var(--bg-card)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-             >Create Account</button>
-          </div>
-
-          <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <input 
-              value={loginInput} onChange={e => setLoginInput(e.target.value)} 
-              placeholder="Username" className="ticker-input" style={{ width: '100%', padding: '12px', fontSize: 16, textAlign: 'center' }} 
-              required 
-            />
-            <input 
-              type="password"
-              value={passwordInput} onChange={e => setPasswordInput(e.target.value)} 
-              placeholder="Password" className="ticker-input" style={{ width: '100%', padding: '12px', fontSize: 16, textAlign: 'center' }} 
-              required minLength={4}
-            />
-            {authError && <div style={{ color: '#ff6b6b', fontSize: 13, fontWeight: 'bold' }}>{authError}</div>}
-            
-            <button type="submit" className="btn-analyze" style={{ padding: '12px', width: '100%', fontSize: 16 }} disabled={authLoading}>
-              {authLoading ? 'Authenticating...' : (authMode === 'login' ? 'Secure Login' : 'Register Account')}
-            </button>
-          </form>
-        </div>
-      </div>
-    );
+    return <LandingPage onAuthSuccess={(uid) => { setUserId(uid); localStorage.setItem('quant_user_id', uid); }} />;
   }
 
   const price      = analysis?.current_price;
@@ -316,47 +265,54 @@ export default function App() {
                   <span className="model-badge">v{analysis.model_version} · {analysis.feature_dim}D · {analysis.burnin_bars}bar burn-in</span>
                 </div>
 
-                {/* Row 1: Regime + Sentiment */}
-                <div className="analyze-row-2col">
-                  <RegimePanel regime={analysis.regime} />
-                  <SentimentPanel
-                    sentiment={analysis.sentiment}
-                    secFlags={analysis.sec_flags}
-                  />
-                </div>
+                {/* ── STACKED DASHBOARD ────────────────────────────── */}
+                <div className="dashboard-layout" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  
+                  {/* Top Row: Chart (2/3) and Trade Decision (1/3) */}
+                  <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '2fr 380px', gap: '24px', alignItems: 'stretch' }}>
+                    <div className="chart-card" style={{ display: 'flex', flexDirection: 'column' }}>
+                      <div className="card-header">
+                        <span className="card-title">📉 Interactive Price Action</span>
+                        <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                          {analysis.ohlcv_bars?.length} bars
+                        </span>
+                      </div>
+                      <div className="chart-container" style={{ height: "550px", flex: 1 }}>
+                        <ErrorBoundary>
+                          <CandlestickChart data={analysis.ohlcv_bars} />
+                        </ErrorBoundary>
+                      </div>
+                    </div>
 
-                {/* Row 2: Chart */}
-                <div className="chart-card">
-                  <div className="card-header">
-                    <span className="card-title">📉 Price Chart</span>
-                    <span style={{ fontSize: 11, color: '#647091' }}>
-                      {analysis.ohlcv_bars?.length} bars
-                    </span>
+                    <ErrorBoundary>
+                      <TradeDecision data={analysis} />
+                    </ErrorBoundary>
                   </div>
-                  <div className="chart-container">
-                    <CandlestickChart data={analysis.ohlcv_bars} />
+
+                  {/* Middle Row: Secondary Metrics */}
+                  <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px', alignItems: 'stretch' }}>
+                    <RegimePanel regime={analysis.regime} />
+                    <SentimentPanel
+                      sentiment={analysis.sentiment}
+                      secFlags={analysis.sec_flags}
+                    />
+                    {analysis.macro_context && (
+                      <MacroPanel macro={analysis.macro_context} />
+                    )}
                   </div>
-                </div>
 
-                {/* Row 3: Macro */}
-                {analysis.macro_context && (
-                  <MacroPanel macro={analysis.macro_context} />
-                )}
+                  {/* Bottom Row: Deeper Analytics */}
+                  <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px' }}>
+                     <SHAPPanel shap={analysis?.shap} />
+                     <DisagreementHeatmap analysis={analysis} />
+                  </div>
 
-                {/* Row 4: Agent signals + Trade Decision */}
-                <div className="analyze-row-2col">
-                  <div>
+                  {/* Footer Vector */}
+                  <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px' }}>
                     <AgentSignals data={analysis} />
-                    <DisagreementHeatmap analysis={analysis} />
-                  </div>
-                  <div>
-                    <TradeDecision data={analysis} />
                     <StateVector analysis={analysis} />
                   </div>
                 </div>
-
-                {/* Row 5: SHAP */}
-                <SHAPPanel shap={analysis?.shap} />
               </>
             )}
           </>
@@ -369,10 +325,10 @@ export default function App() {
         {activeTab === 'profit' && <AIProfitProofTab analysis={analysis} />}
 
         {/* ── TAB 2: RL BRAIN ─────────────────────────────────────── */}
-        {activeTab === 'rl' && <RLBrainTab analysis={analysis} />}
+        {activeTab === 'rl' && <RLBrainTab analysis={analysis} onRefreshAnalysis={handleAnalyze} />}
 
         {/* ── TAB 3: COMPARE ──────────────────────────────────────── */}
-        {activeTab === 'compare' && <CompareTab userId={userId} />}
+        {activeTab === 'compare' && <CompareTab userId={userId} onTradeTicker={(sym) => { setTicker(sym); setActiveTab('paper'); }} />}
 
         {/* ── TAB 4: BACKTEST ─────────────────────────────────────── */}
         {activeTab === 'backtest' && <BacktestTab />}

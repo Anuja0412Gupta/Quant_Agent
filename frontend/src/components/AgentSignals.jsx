@@ -1,51 +1,92 @@
 /**
- * AgentSignals
- * Displays a card for each agent: signal badge, confidence bar, and explanation.
+ * AgentSignals v4.0 — Premium agent signal dashboard
  */
+import React from 'react';
 
-function ConfidenceBar({ value }) {
-  const safe = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
-  const pct = Math.round(safe * 100);
-  const hue = pct > 66 ? '#00e5a0' : pct > 33 ? '#ffb830' : '#ff4f72';
-  return (
-    <div className="confidence-bar-wrapper">
-      <div className="confidence-label">
-        <span>Confidence</span>
-        <strong>{pct}%</strong>
-      </div>
-      <div className="confidence-bar-track">
-        <div
-          className="confidence-bar-fill"
-          style={{ width: `${pct}%`, background: hue }}
-        />
-      </div>
-    </div>
-  );
+const SIGNAL_CFG = {
+  BUY:           { color: '#00e5a0', icon: '🚀', bg: 'rgba(0,229,160,0.1)',  border: 'rgba(0,229,160,0.3)'  },
+  BULLISH:       { color: '#00e5a0', icon: '📈', bg: 'rgba(0,229,160,0.1)',  border: 'rgba(0,229,160,0.3)'  },
+  TRENDING:      { color: '#00e5a0', icon: '📈', bg: 'rgba(0,229,160,0.1)',  border: 'rgba(0,229,160,0.3)'  },
+  trending:      { color: '#00e5a0', icon: '📈', bg: 'rgba(0,229,160,0.1)',  border: 'rgba(0,229,160,0.3)'  },
+  SELL:          { color: '#ff4f72', icon: '🔻', bg: 'rgba(255,79,114,0.1)', border: 'rgba(255,79,114,0.3)' },
+  BEARISH:       { color: '#ff4f72', icon: '📉', bg: 'rgba(255,79,114,0.1)', border: 'rgba(255,79,114,0.3)' },
+  UPTREND:       { color: '#00e5a0', icon: '↗️', bg: 'rgba(0,229,160,0.08)', border: 'rgba(0,229,160,0.25)' },
+  DOWNTREND:     { color: '#ff4f72', icon: '↘️', bg: 'rgba(255,79,114,0.08)', border: 'rgba(255,79,114,0.25)' },
+  NEUTRAL:       { color: '#ffb830', icon: '⚖️', bg: 'rgba(255,184,48,0.1)', border: 'rgba(255,184,48,0.3)' },
+  HOLD:          { color: '#ffb830', icon: '⚖️', bg: 'rgba(255,184,48,0.1)', border: 'rgba(255,184,48,0.3)' },
+  FLAT:          { color: '#64748b', icon: '➖', bg: 'rgba(100,116,139,0.1)', border: 'rgba(100,116,139,0.3)' },
+  HIGH_VOLATILITY:{ color: '#ff4f72', icon: '⚡', bg: 'rgba(255,79,114,0.1)', border: 'rgba(255,79,114,0.3)' },
+  mean_reverting:{ color: '#60a5fa', icon: '↔️', bg: 'rgba(96,165,250,0.1)', border: 'rgba(96,165,250,0.3)'  },
+};
+
+function getSignalCfg(signal) {
+  const key = String(signal || '').toUpperCase().replace(/ /g, '_');
+  return SIGNAL_CFG[key] || SIGNAL_CFG[String(signal || '').toLowerCase()] || {
+    color: '#64748b', icon: '❓', bg: 'rgba(100,116,139,0.1)', border: 'rgba(100,116,139,0.3)'
+  };
 }
 
-function IndicatorValues({ values }) {
-  if (!values || Object.keys(values).length === 0) return null;
+function AgentCard({ icon, title, signal, confidence, explanation, extraRows = [] }) {
+  const cfg = getSignalCfg(signal);
+  const pct = Math.round(Math.max(0, Math.min(1, confidence || 0)) * 100);
+  const confColor = pct > 66 ? '#00e5a0' : pct > 33 ? '#ffb830' : '#ff4f72';
+
   return (
-    <div className="indicator-grid">
-      {Object.entries(values).map(([k, v]) => (
-        <div className="indicator-item" key={k}>
-          <span className="ik">{k.toUpperCase()}</span>
-          <span className="iv">{typeof v === 'number' ? v.toFixed(2) : v}</span>
+    <div style={{
+      background: 'var(--bg-card)',
+      border: `1px solid ${cfg.border}`,
+      borderRadius: 14,
+      padding: '20px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12,
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 20 }}>{icon}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{title}</span>
         </div>
-      ))}
-    </div>
-  );
-}
+        {signal && (
+          <div style={{
+            padding: '4px 12px', borderRadius: 20,
+            background: cfg.bg, border: `1px solid ${cfg.border}`,
+            color: cfg.color, fontSize: 12, fontWeight: 800, letterSpacing: 1,
+          }}>
+            {cfg.icon} {String(signal).toUpperCase()}
+          </div>
+        )}
+      </div>
 
-function AgentCard({ title, signal, confidence, explanation, extra }) {
-  const sigClass = `signal-${String(signal || '').toLowerCase().replace(/ /g, '_')}`;
-  return (
-    <div className="agent-card">
-      <div className="agent-name">{title}</div>
-      <div className={`agent-signal ${sigClass}`}>{signal || '-'}</div>
-      <ConfidenceBar value={confidence || 0} />
-      {extra}
-      <p className="agent-explanation">{explanation || ''}</p>
+      {/* Confidence bar */}
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, color: '#64748b' }}>
+          <span>Confidence</span>
+          <span style={{ color: confColor, fontWeight: 700, fontFamily: 'var(--mono)' }}>{pct}%</span>
+        </div>
+        <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', background: confColor, borderRadius: 3, transition: 'width 0.8s ease' }} />
+        </div>
+      </div>
+
+      {/* Extra key-value rows */}
+      {extraRows.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
+          {extraRows.map(({ label, value }) => (
+            <div key={label} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ fontSize: 10, color: '#64748b', fontWeight: 700, marginBottom: 3 }}>{label}</div>
+              <div style={{ fontSize: 13, color: '#f1f5f9', fontFamily: 'var(--mono)', fontWeight: 600 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Explanation */}
+      {explanation && (
+        <p style={{ fontSize: 12, color: '#64748b', lineHeight: 1.6, margin: 0, borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 10 }}>
+          {explanation}
+        </p>
+      )}
     </div>
   );
 }
@@ -54,86 +95,105 @@ export default function AgentSignals({ data }) {
   if (!data) return null;
 
   const disagreement = data.disagreement || {};
-  const regime = data.regime || {};
-
-  const list = Array.isArray(data.agent_signals) ? data.agent_signals : [];
-  const byName = Object.fromEntries(
-    list.map((a) => [String(a?.agent_name || '').toLowerCase(), a])
-  );
+  const regime       = data.regime || {};
+  const list         = Array.isArray(data.agent_signals) ? data.agent_signals : [];
+  const byName       = Object.fromEntries(list.map(a => [String(a?.agent_name || '').toLowerCase(), a]));
 
   const indicator = byName.indicator?.reasoning || {};
-  const pattern = byName.pattern?.reasoning || {};
-  const trend = byName.trend?.reasoning || {};
+  const pattern   = byName.pattern?.reasoning   || {};
+  const trend     = byName.trend?.reasoning     || {};
 
-  const indicatorConfidence = byName.indicator?.confidence ?? indicator?.confidence ?? 0;
-  const patternConfidence = byName.pattern?.confidence ?? pattern?.confidence ?? 0;
-  const trendConfidence = byName.trend?.confidence ?? trend?.confidence ?? 0;
-  const disagreementScore = disagreement?.disagreement_score ?? disagreement?.total_uncertainty ?? 0;
+  const indicatorConf   = byName.indicator?.confidence ?? 0;
+  const patternConf     = byName.pattern?.confidence   ?? 0;
+  const trendConf       = byName.trend?.confidence     ?? 0;
+  const disagreeScore   = disagreement?.disagreement_score ?? disagreement?.total_uncertainty ?? 0;
+  const agentConsensus  = disagreement?.agent_consensus ?? 0;
+
+  const ConsensusColor = disagreeScore > 0.7 ? '#ff4f72' : disagreeScore > 0.4 ? '#ffb830' : '#00e5a0';
 
   return (
-    <div>
-      <div className="section-label">Agent Signals</div>
-      <div className="agents-grid">
+    <div className="card" style={{ background: 'transparent', border: 'none', padding: 0, boxShadow: 'none' }}>
+      <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 16 }}>
+        MULTI-AGENT SIGNAL CONSENSUS
+      </div>
+
+      {/* Agreement banner */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: `rgba(${disagreeScore > 0.7 ? '255,79,114' : disagreeScore > 0.4 ? '255,184,48' : '0,229,160'},0.08)`,
+        border: `1px solid ${ConsensusColor}40`,
+        borderRadius: 12, padding: '14px 20px', marginBottom: 20, gap: 16,
+      }}>
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>DOMINANT SIGNAL</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: ConsensusColor }}>
+            {disagreement.dominant_signal || 'NEUTRAL'}
+          </div>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>AGENT CONSENSUS</div>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--mono)', color: ConsensusColor }}>
+            {(agentConsensus * 100).toFixed(0)}%
+          </div>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>DISAGREEMENT</div>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--mono)', color: ConsensusColor }}>
+            {(disagreeScore * 100).toFixed(0)}%
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>RECOMMENDATION</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: ConsensusColor, padding: '4px 12px', background: `${ConsensusColor}22`, borderRadius: 20 }}>
+            {disagreement.recommendation || 'PROCEED'}
+          </div>
+        </div>
+      </div>
+
+      {/* Agent cards grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
         <AgentCard
-          title="Indicator Agent"
+          icon="📊" title="Indicator Agent"
           signal={indicator?.signal}
-          confidence={indicatorConfidence}
+          confidence={indicatorConf}
           explanation={indicator?.explanation}
-          extra={<IndicatorValues values={indicator?.indicator_values} />}
+          extraRows={Object.entries(indicator?.indicator_values || {}).slice(0, 4).map(([k, v]) => ({
+            label: k.toUpperCase(),
+            value: typeof v === 'number' ? v.toFixed(3) : String(v),
+          }))}
         />
 
         <AgentCard
-          title="Pattern Agent"
+          icon="🕯️" title="Pattern Agent"
           signal={pattern?.signal}
-          confidence={patternConfidence}
-          explanation={pattern?.pattern ? `${pattern.pattern} - ${pattern?.explanation || ''}` : pattern?.explanation}
+          confidence={patternConf}
+          explanation={pattern?.explanation}
+          extraRows={pattern?.pattern ? [{ label: 'PATTERN', value: pattern.pattern }] : []}
         />
 
         <AgentCard
-          title="Trend Agent"
+          icon="📐" title="Trend Agent"
           signal={trend?.trend}
-          confidence={trendConfidence}
+          confidence={trendConf}
           explanation={trend?.explanation}
-          extra={
-            <div className="indicator-grid">
-              <div className="indicator-item"><span className="ik">SLOPE</span><span className="iv">{trend?.slope?.toFixed?.(4) ?? '-'}</span></div>
-              <div className="indicator-item"><span className="ik">STRENGTH</span><span className="iv">{trend?.strength != null ? `${(trend.strength * 100).toFixed(1)}%` : '-'}</span></div>
-              <div className="indicator-item"><span className="ik">SUPPORT</span><span className="iv">{trend?.support?.toFixed?.(2) ?? '-'}</span></div>
-              <div className="indicator-item"><span className="ik">RESIST</span><span className="iv">{trend?.resistance?.toFixed?.(2) ?? '-'}</span></div>
-            </div>
-          }
+          extraRows={[
+            { label: 'SLOPE', value: trend?.slope?.toFixed?.(4) ?? '-' },
+            { label: 'STRENGTH', value: trend?.strength != null ? `${(trend.strength * 100).toFixed(1)}%` : '-' },
+            { label: 'SUPPORT', value: trend?.support?.toFixed?.(2) ?? '-' },
+            { label: 'RESIST', value: trend?.resistance?.toFixed?.(2) ?? '-' },
+          ].filter(r => r.value !== '-')}
         />
 
         <AgentCard
-          title="Market Regime"
+          icon="🎯" title="Regime Agent"
           signal={regime?.regime || regime?.signal}
           confidence={regime?.confidence}
           explanation={regime?.explanation}
-          extra={
-            <div className="indicator-grid">
-              <div className="indicator-item"><span className="ik">HURST</span><span className="iv">{regime?.hurst?.toFixed?.(3) ?? '-'}</span></div>
-              <div className="indicator-item"><span className="ik">ATR%</span><span className="iv">{regime?.atr_ratio != null ? `${(regime.atr_ratio * 100).toFixed(2)}%` : '-'}</span></div>
-            </div>
-          }
+          extraRows={[
+            { label: 'HURST', value: regime?.hurst?.toFixed?.(3) ?? '-' },
+            { label: 'ATR %', value: regime?.atr_ratio != null ? `${(regime.atr_ratio * 100).toFixed(2)}%` : '-' },
+          ].filter(r => r.value !== '-')}
         />
-
-        {!!Object.keys(disagreement).length && (
-          <div className="agent-card">
-            <div className="agent-name">Disagreement</div>
-            <div className="disagree-row">
-              <span className="disagree-index" style={{ color: disagreementScore > 0.6 ? '#ff4f72' : '#00e5a0' }}>
-                {Number.isFinite(disagreementScore) ? disagreementScore.toFixed(4) : '-'}
-              </span>
-              <span className={`rec-badge rec-${disagreement.recommendation}`}>
-                {disagreement.recommendation || 'PROCEED'}
-              </span>
-            </div>
-            <ConfidenceBar value={Math.min(1, Math.max(0, disagreementScore))} />
-            <p className="agent-explanation">
-              Consensus: {disagreement.dominant_signal || 'NEUTRAL'}
-            </p>
-          </div>
-        )}
       </div>
     </div>
   );

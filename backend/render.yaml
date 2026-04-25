@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: quant-agent-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: FRED_API_KEY
+        sync: false
+      - key: NEWS_API_KEY
+        sync: false
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: quant_agent
+      - key: VERCEL_FRONTEND_URL
+        value: https://quant-agent-green.vercel.app
+      - key: MODEL_SAVE_DIR
+        value: ./models
+      - key: PAPER_PORTFOLIO_PATH
+        value: ./data/paper_portfolio.json

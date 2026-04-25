@@ -2,218 +2,345 @@ import { useState, useCallback } from 'react';
 import axios from 'axios';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend, ReferenceLine,
+  ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-/**
- * BacktestTab — Full Walk-Forward Validated Backtesting
- * ======================================================
- * - Three overlaid equity curves (RL, static, buy-and-hold)
- * - Walk-forward folds chart (OOS Sharpe per fold) — KEY
- * - Metrics table: per-fold + aggregate
- * - Crash Stress Test (30-day replay) — KEY SHOWSTOPPER
- */
+// ── helpers ─────────────────────────────────────────────────────────────────
+function pct(v, dp = 2)  { return `${((v || 0) * 100).toFixed(dp)}%`; }
+function fixed(v, dp = 3){ return v != null ? Number(v).toFixed(dp) : '—'; }
+
+function MetricTile({ label, value, color = '#f1f5f9', sub }) {
+  return (
+    <div style={{
+      background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+      borderRadius: 12, padding: '16px 18px',
+    }}>
+      <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color, fontFamily: 'var(--mono)' }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+const STRESS_COLORS = {
+  'COVID Crash':     '#ff4f72',
+  'Dotcom Bust':     '#f59e0b',
+  'GFC 2008':        '#fb923c',
+  'Flash Crash':     '#a78bfa',
+  'Rate Shock 2022': '#60a5fa',
+};
+
 export default function BacktestTab() {
-  const [ticker,    setTicker]    = useState('AAPL');
-  const [timeframe, setTimeframe] = useState('1d');
-  const [backtest,  setBacktest]  = useState(null);
-  const [loading,   setLoading]   = useState(false);
+  const [ticker,   setTicker]   = useState('AAPL');
+  const [timeframe,setTimeframe]= useState('1d');
+  const [backtest, setBacktest] = useState(null);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState(null);
 
   const fetchBacktest = useCallback(async () => {
-    setLoading(true);
+    setLoading(true); setError(null);
     try {
       const period = { '1m': '7d', '5m': '60d', '15m': '60d', '1h': '730d', '1d': '5y' }[timeframe] || '5y';
       const { data } = await axios.post(`${API}/backtest`, {
-        symbol: ticker.toUpperCase(), timeframe, period
+        symbol: ticker.toUpperCase(), timeframe, period,
       }, { timeout: 300_000 });
       setBacktest(data);
     } catch (e) {
-      console.error('Backtest failed:', e.message);
-    } finally {
-      setLoading(false);
-    }
+      setError(e.response?.data?.detail || e.message || 'Backtest failed');
+    } finally { setLoading(false); }
   }, [ticker, timeframe]);
 
-  const fetchStress = useCallback(async () => {
-    // Stress test is already computed and returned in the /backtest endpoint
-    // We just map it directly in the UI render.
-  }, []);
+  const m       = backtest?.overall_metrics   || {};
+  const folds   = backtest?.walk_forward_folds || [];
+  const wfSum   = backtest?.walk_forward_summary || {};
+  const stress  = backtest?.stress_test_results;
 
-  // Equity curve data
-  const equityData = backtest ? (backtest.equity_curve || []).map((v, i) => ({ bar: i, value: v })) : [];
+  const equityData = (backtest?.equity_curve || []).map((v, i) => ({ bar: i, value: v }));
 
-  // Walk-forward folds data
-  const foldData = backtest?.walk_forward_folds || [];
-  const wfSummary = backtest?.walk_forward_summary || {};
-  const stress = backtest?.stress_test_results || null;
-  const stLoading = loading;
-
-  // Stress test data
-  const stressSteps = stress?.steps || [];
-  const stressSummary = stress?.summary || {};
-
-  const m = backtest?.overall_metrics || {};
-
-  const metricCard = (label, value, color) => (
-    <div key={label} style={{ padding: '12px 16px', borderRadius: 10,
-                              background: 'rgba(255,255,255,0.03)',
-                              border: '1px solid rgba(255,255,255,0.07)',
-                              display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={{ fontSize: 11, color: '#647091' }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'monospace', color: color || '#e2e8f0' }}>
-        {value}
-      </div>
-    </div>
-  );
+  const returnColor = (m.annualized_ret || 0) >= 0 ? '#00e5a0' : '#ff4f72';
+  const sharpeColor = (m.sharpe || 0) >= 1 ? '#00e5a0' : (m.sharpe || 0) >= 0 ? '#ffb830' : '#ff4f72';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-      {/* Controls */}
-      <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span className="card-title" style={{ marginRight: 8 }}>📊 Backtest</span>
-        <input id="backtest-ticker-input" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
-               style={{ width: 90, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 8, padding: '7px 12px', color: '#fff', fontSize: 13 }} />
-        <select id="backtest-tf-select" value={timeframe} onChange={e => setTimeframe(e.target.value)}
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                         borderRadius: 8, padding: '7px 12px', color: '#fff', fontSize: 13 }}>
-          {['1m','5m','15m','1h','1d'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
-        </select>
-        <button id="run-backtest-btn" className="btn-analyze" onClick={fetchBacktest} disabled={loading} style={{ marginLeft: 'auto' }}>
-          {loading ? 'Running…' : '▶ Run Backtest & Stress Test'}
-        </button>
+      {/* ── Controls ─────────────────────────────────────────────── */}
+      <div className="card">
+        <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 16 }}>
+          📈 WALK-FORWARD BACKTEST ENGINE
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>TICKER</div>
+            <input
+              id="backtest-ticker-input"
+              value={ticker}
+              onChange={e => setTicker(e.target.value.toUpperCase())}
+              style={{
+                width: 100, background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10,
+                padding: '10px 14px', color: '#f1f5f9', fontSize: 14,
+              }}
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>TIMEFRAME</div>
+            <select
+              id="backtest-tf-select"
+              value={timeframe}
+              onChange={e => setTimeframe(e.target.value)}
+              style={{
+                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 10, padding: '10px 14px', color: '#f1f5f9', fontSize: 14,
+              }}
+            >
+              {['1m','5m','15m','1h','1d'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }} />
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 11, color: '#475569', marginBottom: 6 }}>
+              Includes walk-forward folds + 5 historical stress scenarios
+            </div>
+            <button
+              id="run-backtest-btn"
+              disabled={loading}
+              onClick={fetchBacktest}
+              style={{
+                padding: '12px 28px', borderRadius: 10, border: 'none',
+                background: loading ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                color: loading ? '#64748b' : '#fff', fontSize: 14, fontWeight: 800, cursor: 'pointer',
+                boxShadow: loading ? 'none' : '0 4px 20px rgba(99,102,241,0.35)',
+              }}
+            >
+              {loading ? '⏳ Running (~2 min)…' : '▶ Run Backtest & Stress Test'}
+            </button>
+          </div>
+        </div>
+        {error && (
+          <div style={{ marginTop: 14, padding: '12px 16px', background: 'rgba(255,79,114,0.08)', border: '1px solid rgba(255,79,114,0.3)', borderRadius: 10, color: '#ff4f72', fontSize: 13 }}>
+            ❌ {error}
+          </div>
+        )}
       </div>
 
-      {/* Metrics Summary */}
-      {backtest && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-          {metricCard('Annualized Ret', `${((m.annualized_ret || 0) * 100).toFixed(2)}%`, (m.annualized_ret || 0) >= 0 ? '#68d391' : '#fc8181')}
-          {metricCard('Sharpe Ratio',   m.sharpe?.toFixed(4),                 m.sharpe >= 1 ? '#68d391' : '#f6e05e')}
-          {metricCard('Sortino Ratio',  m.sortino?.toFixed(4),                '#63b3ed')}
-          {metricCard('Calmar Ratio',   m.calmar?.toFixed(4),                 '#68d391')}
-          {metricCard('Max Drawdown',   `${((m.max_drawdown || 0) * 100).toFixed(2)}%`,    '#fc8181')}
-          {metricCard('Win Rate',       `${((m.win_rate || 0) * 100).toFixed(1)}%`,         '#f6e05e')}
-          {metricCard('Profit Factor',  m.profit_factor?.toFixed(3),                '#a78bfa')}
-          {metricCard('Trades',         m.n_trades,                                  '#a0aec0')}
+      {/* ── Loading state ─────────────────────────── */}
+      {loading && (
+        <div style={{ textAlign: 'center', padding: '60px 24px', color: '#64748b' }}>
+          <div style={{ fontSize: 32, marginBottom: 16 }}>⚙️</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#94a3b8', marginBottom: 8 }}>Running Walk-Forward Backtest</div>
+          <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+            Fitting HMM regime model → Training RL folds → Running stress scenarios<br />
+            This can take 2–5 minutes. Please wait…
+          </div>
         </div>
       )}
 
-      {/* Equity Curve */}
-      {equityData.length > 0 && (
-        <div className="card">
-          <div className="card-header"><span className="card-title">📈 Equity Curve</span></div>
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={equityData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="bar" tick={{ fill: '#647091', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#647091', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
-              <Tooltip contentStyle={{ background: 'rgba(26,27,58,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
-                       formatter={v => [`$${v?.toFixed(0)}`]} />
-              <ReferenceLine y={100_000} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" />
-              <Line type="monotone" dataKey="value" stroke="#6366f1" dot={false} strokeWidth={2.5} name="RL Portfolio" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Walk-Forward Folds — KEY */}
-      {foldData.length > 0 && (
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">🔄 Walk-Forward OOS Sharpe</span>
-            <div style={{ fontSize: 11, color: '#8b9fc0' }}>
-              Mean: <span style={{ color: '#68d391', fontWeight: 700 }}>{wfSummary.mean_test_sharpe?.toFixed(4)}</span>
-              &nbsp;±&nbsp;{wfSummary.std_test_sharpe?.toFixed(4)}
-              &nbsp;|&nbsp;Worst Fold: {wfSummary.worst_test_sharpe?.toFixed(3)}
+      {/* ── Summary Metrics ──────────────────────────────────────── */}
+      {backtest && !loading && (
+        <>
+          <div>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 14 }}>
+              OVERALL PERFORMANCE METRICS
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+              <MetricTile label="ANNUALIZED RETURN" value={pct(m.annualized_ret)} color={returnColor}
+                sub={(m.annualized_ret || 0) >= 0 ? '✓ Positive CAGR' : '⚠ Negative CAGR'} />
+              <MetricTile label="SHARPE RATIO" value={fixed(m.sharpe, 3)} color={sharpeColor}
+                sub={m.sharpe >= 1 ? '✓ Excellent risk-adj.' : m.sharpe >= 0 ? 'Acceptable' : '⚠ Below zero'} />
+              <MetricTile label="SORTINO RATIO" value={fixed(m.sortino, 3)} color="#60a5fa"
+                sub="Downside deviation adjusted" />
+              <MetricTile label="CALMAR RATIO" value={fixed(m.calmar, 3)} color="#a78bfa"
+                sub="Return / Max Drawdown" />
+              <MetricTile label="MAX DRAWDOWN" value={pct(m.max_drawdown)} color="#ff4f72"
+                sub="Worst peak-to-trough" />
+              <MetricTile label="WIN RATE" value={pct(m.win_rate, 1)} color="#ffb830"
+                sub={`${m.n_trades || 0} total trades`} />
+              <MetricTile label="PROFIT FACTOR" value={fixed(m.profit_factor, 3)} color="#00e5a0"
+                sub="Gross profit / gross loss" />
+              <MetricTile label="TOTAL TRADES" value={m.n_trades ?? '—'} color="#94a3b8"
+                sub="Executed positions" />
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={foldData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="fold" tick={{ fill: '#647091', fontSize: 10 }} label={{ value: 'Fold', position: 'insideBottom', fill: '#647091', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#647091', fontSize: 10 }} />
-              <Tooltip contentStyle={{ background: 'rgba(26,27,58,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
-                       formatter={(v, n) => [v?.toFixed(4), n]} />
-              <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-              <Bar dataKey="test_sharpe"  fill="#6366f1" radius={[4,4,0,0]} name="OOS Sharpe" />
-            </BarChart>
-          </ResponsiveContainer>
-          {/* Fold table */}
-          <div style={{ overflowX: 'auto', marginTop: 12 }}>
-            <table style={{ width: '100%', fontSize: 11, borderCollapse: 'separate', borderSpacing: '0 3px' }}>
-              <thead>
-                <tr style={{ color: '#647091' }}>
-                  {['Fold','Train Bars','Test Bars','Sharpe','Sortino','CVaR(95%)','Drawdown'].map(h => (
-                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {foldData.map(f => (
-                  <tr key={f.fold} style={{ background: 'rgba(255,255,255,0.02)' }}>
-                    <td style={{ padding: '5px 8px', color: '#e2e8f0', fontWeight: 700 }}>{f.fold}</td>
-                    <td style={{ padding: '5px 8px', color: '#8b9fc0' }}>{f.train_bars}</td>
-                    <td style={{ padding: '5px 8px', color: '#8b9fc0' }}>{f.test_bars}</td>
-                    <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: f.test_sharpe >= 0 ? '#68d391' : '#fc8181' }}>
-                      {f.test_sharpe?.toFixed(4)}
-                    </td>
-                    <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: '#63b3ed' }}>{f.test_sortino?.toFixed(4)}</td>
-                    <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: '#fc8181' }}>
-                      {(f.test_cvar * 100).toFixed(2)}%
-                    </td>
-                    <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: '#fc8181' }}>
-                      {(f.test_maxdd * 100).toFixed(2)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
-      {/* Historical Stress Tests */}
-      {stress && Object.keys(stress).length > 0 && (
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">⚡ Extreme Historical Scenarios</span>
-            <span style={{ fontSize: 11, color: '#647091' }}>
-              Vol shocks & widened proxy spreads applied to strategy PnL
-            </span>
-          </div>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-            {Object.entries(stress).map(([key, sc]) => (
-              <div key={key} style={{
-                padding: 12, borderRadius: 10, background: 'rgba(255,255,255,0.02)',
-                border: '1px solid rgba(255,255,255,0.07)',
-              }}>
-                <div style={{ color: '#e2e8f0', fontWeight: 700, marginBottom: 6, fontSize: 12 }}>{sc.scenario || key}</div>
-                
-                <div style={{ display: 'flex', gap: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 10, color: '#647091' }}>Stressed CAGR</div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: (sc.annualized_ret || 0) >= 0 ? '#68d391' : '#fc8181', fontFamily: 'monospace' }}>
-                      {((sc.annualized_ret || 0) * 100).toFixed(2)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: '#647091' }}>Max DD</div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: '#fc8181', fontFamily: 'monospace' }}>
-                      {((sc.max_drawdown || 0) * 100).toFixed(2)}%
-                    </div>
-                  </div>
+          {/* ── Equity Curve ─────────────────────────────────────── */}
+          {equityData.length > 0 && (
+            <div className="card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>📈 PORTFOLIO EQUITY CURVE</div>
+                  <div style={{ fontSize: 13, color: '#94a3b8' }}>Starting capital $100,000 — RL managed positions</div>
                 </div>
-                
-                <div style={{ fontSize: 11, color: '#8b9fc0', marginTop: 8 }}>
-                  Spread Multiplier: <span style={{ color: '#f6e05e', fontWeight: 700 }}>{sc.spread_multiplier}x</span>
-                  &nbsp;|&nbsp; Sharpe: <span style={{ color: '#63b3ed', fontWeight: 700 }}>{sc.sharpe?.toFixed(2)}</span>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>FINAL VALUE</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--mono)', color: returnColor }}>
+                    ${(equityData.at(-1)?.value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </div>
                 </div>
               </div>
-            ))}
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={equityData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+                  <XAxis dataKey="bar" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false}
+                    tickFormatter={v => `Bar ${v}`} />
+                  <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false}
+                    tickFormatter={v => `$${(v/1000).toFixed(0)}k`} width={70} />
+                  <Tooltip
+                    contentStyle={{ background: '#1a2035', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, fontSize: 13 }}
+                    formatter={v => [`$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 'Portfolio Value']}
+                  />
+                  <ReferenceLine y={100_000} stroke="rgba(255,255,255,0.12)" strokeDasharray="5 4" label={{ value: 'Start $100k', fill: '#475569', fontSize: 11 }} />
+                  <Line type="monotone" dataKey="value" stroke="#6366f1" dot={false} strokeWidth={2.5} name="RL Portfolio" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* ── Walk-Forward Folds ────────────────────────────────── */}
+          {folds.length > 0 && (
+            <div className="card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>🔄 WALK-FORWARD OUT-OF-SAMPLE SHARPE</div>
+                  <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                    Model trained on each fold's in-sample data, tested on unseen out-of-sample period.
+                    Consistent positive OOS Sharpe proves the strategy truly generalizes.
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 24 }}>
+                  <div style={{ display: 'flex', gap: 24 }}>
+                    {[
+                      { label: 'MEAN OOS SHARPE', value: fixed(wfSum.mean_test_sharpe, 3), color: (wfSum.mean_test_sharpe || 0) >= 0 ? '#00e5a0' : '#ff4f72' },
+                      { label: 'STD DEV', value: `±${fixed(wfSum.std_test_sharpe, 3)}`, color: '#94a3b8' },
+                      { label: 'WORST FOLD', value: fixed(wfSum.worst_test_sharpe, 3), color: '#ff4f72' },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 10, color: '#475569', marginBottom: 4 }}>{label}</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--mono)', color }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={folds} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                  <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+                  <XAxis dataKey="fold" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false}
+                    tickFormatter={v => `Fold ${v}`} />
+                  <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ background: '#1a2035', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, fontSize: 13 }}
+                    formatter={(v, n) => [v?.toFixed(4), n]}
+                  />
+                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" />
+                  <Bar dataKey="test_sharpe" name="OOS Sharpe" radius={[6,6,0,0]}>
+                    {folds.map((f, i) => (
+                      <Cell key={i} fill={(f.test_sharpe || 0) >= 0 ? '#6366f1' : '#ff4f72'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+
+              {/* Fold table */}
+              <div style={{ overflowX: 'auto', marginTop: 20 }}>
+                <table style={{ width: '100%', fontSize: 13, borderCollapse: 'separate', borderSpacing: '0 6px' }}>
+                  <thead>
+                    <tr>
+                      {['Fold', 'Train Bars', 'Test Bars', 'OOS Sharpe', 'OOS Sortino', 'CVaR (95%)', 'Max Drawdown'].map(h => (
+                        <th key={h} style={{ textAlign: 'left', padding: '6px 14px', fontSize: 11, color: '#64748b', fontWeight: 700 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {folds.map(f => (
+                      <tr key={f.fold} style={{ background: 'rgba(255,255,255,0.02)' }}>
+                        <td style={{ padding: '10px 14px', fontWeight: 800, color: '#f1f5f9', fontSize: 14 }}>#{f.fold}</td>
+                        <td style={{ padding: '10px 14px', color: '#64748b', fontFamily: 'var(--mono)' }}>{f.train_bars}</td>
+                        <td style={{ padding: '10px 14px', color: '#64748b', fontFamily: 'var(--mono)' }}>{f.test_bars}</td>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--mono)', fontWeight: 700,
+                          color: (f.test_sharpe || 0) >= 0 ? '#00e5a0' : '#ff4f72' }}>
+                          {fixed(f.test_sharpe, 4)}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--mono)', color: '#60a5fa' }}>
+                          {fixed(f.test_sortino, 4)}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--mono)', color: '#ff4f72' }}>
+                          {pct(f.test_cvar)}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--mono)', color: '#ff4f72' }}>
+                          {pct(f.test_maxdd)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ── Stress Test Scenarios ────────────────────────────── */}
+          {stress && Object.keys(stress).length > 0 && (
+            <div className="card">
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>
+                  ⚡ EXTREME HISTORICAL STRESS SCENARIOS
+                </div>
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                  Volatility shocks & widened spreads applied to strategy P&amp;L — tests survivability under real crisis conditions.
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                {Object.entries(stress).map(([key, sc]) => {
+                  const scenarioColor = STRESS_COLORS[sc.scenario || key] || '#94a3b8';
+                  const retColor      = (sc.annualized_ret || 0) >= 0 ? '#00e5a0' : '#ff4f72';
+                  return (
+                    <div key={key} style={{
+                      background: `${scenarioColor}08`,
+                      border: `1px solid ${scenarioColor}30`,
+                      borderRadius: 14,
+                      padding: '20px',
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: scenarioColor, marginBottom: 16 }}>
+                        {sc.scenario || key}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+                        <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+                          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>STRESSED CAGR</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--mono)', color: retColor }}>
+                            {pct(sc.annualized_ret)}
+                          </div>
+                        </div>
+                        <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+                          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>MAX DRAWDOWN</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--mono)', color: '#ff4f72' }}>
+                            {pct(sc.max_drawdown)}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#64748b' }}>
+                        <span>Sharpe: <strong style={{ color: '#60a5fa' }}>{sc.sharpe?.toFixed(2) ?? '—'}</strong></span>
+                        <span>Spread: <strong style={{ color: '#ffb830' }}>{sc.spread_multiplier}×</strong></span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Empty state ──────────────────────────────────────────── */}
+      {!backtest && !loading && (
+        <div style={{ textAlign: 'center', padding: '80px 24px', color: '#475569', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+          <div style={{ fontSize: 48 }}>📈</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#64748b' }}>Walk-Forward Backtesting</div>
+          <div style={{ fontSize: 14, color: '#374151', maxWidth: 480, lineHeight: 1.8 }}>
+            Select a ticker and timeframe, then click <strong style={{ color: '#94a3b8' }}>Run Backtest</strong>.
+            The engine performs walk-forward cross-validation to prove real out-of-sample performance,
+            then stress-tests the strategy against 5 historical market crises.
           </div>
         </div>
       )}

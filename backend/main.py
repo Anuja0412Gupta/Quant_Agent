@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import torch  # Eagerly load torch to prevent Windows WinError 1114 async DLL failures
+# torch intentionally NOT imported at module level — lazy-loaded per-request
+# to stay within Render free-tier 512 MB RAM limit.
 import logging
 import os
 import sys
@@ -93,12 +94,23 @@ _component_status: Dict[str, str] = {
 
 @app.on_event("startup")
 async def startup():
-    """Initialize all singletons at startup."""
+    """Lightweight startup — heavy ML singletons are lazy-loaded on first request.
+
+    Render free tier has 512 MB RAM. torch + FinBERT alone consume ~700 MB, so
+    we intentionally skip preloading them here. They are imported the first
+    time their endpoint is hit, which may cause a 30-60 s cold-start on those
+    endpoints. Subsequent calls are fast because Python caches the import.
+    """
     global _component_status
 
-    from db.database import connect_to_mongo
-    await connect_to_mongo()
+    # MongoDB — lightweight async driver, safe to init at startup
+    try:
+        from db.database import connect_to_mongo
+        await connect_to_mongo()
+    except Exception as e:
+        logger.warning("MongoDB connect failed (non-fatal): %s", e)
 
+    # Data fetcher — only downloads market data, no heavy ML
     try:
         from data.data_fetcher import get_fetcher
         get_fetcher()
@@ -106,20 +118,7 @@ async def startup():
     except Exception as e:
         _component_status["data_fetcher"] = f"error: {e}"
 
-    try:
-        from features.feature_pipeline import get_pipeline
-        get_pipeline()
-        _component_status["feature_pipeline"] = "ok"
-    except Exception as e:
-        _component_status["feature_pipeline"] = f"error: {e}"
-
-    try:
-        from risk.risk_management_agent import get_risk_agent
-        get_risk_agent()
-        _component_status["risk_agent"] = "ok"
-    except Exception as e:
-        _component_status["risk_agent"] = f"error: {e}"
-
+    # Portfolio manager — reads JSON file, no ML
     try:
         from portfolio.portfolio_manager import get_portfolio_manager
         get_portfolio_manager()
@@ -127,11 +126,18 @@ async def startup():
     except Exception as e:
         _component_status["portfolio_manager"] = f"error: {e}"
 
-    # Check for pre-trained model
-    rl_path = resolve_model_zip_path(MODEL_SAVE_DIR, "AAPL", "1d")
-    _component_status["rl_model"] = "loaded" if os.path.exists(rl_path) else "not_trained"
+    # Mark heavy components as "pending" — they load on first request
+    _component_status["feature_pipeline"]      = "lazy (loads on first /analyze)"
+    _component_status["regime_agent"]          = "lazy (loads on first /analyze)"
+    _component_status["disagreement_model"]    = "lazy (loads on first /analyze)"
+    _component_status["risk_agent"]            = "lazy (loads on first /analyze)"
+    _component_status["rl_model"]              = "lazy (loads on first /analyze)"
 
-    logger.info("QuantAgent v3.0 started. Component status: %s", _component_status)
+    rl_path = resolve_model_zip_path(MODEL_SAVE_DIR, "AAPL", "1d")
+    if os.path.exists(rl_path):
+        _component_status["rl_model"] = "on-disk (lazy)"
+
+    logger.info("QuantAgent v3.0 started (free-tier mode). Status: %s", _component_status)
 
 @app.on_event("shutdown")
 async def shutdown():

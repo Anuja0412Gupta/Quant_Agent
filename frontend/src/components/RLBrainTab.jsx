@@ -2,57 +2,49 @@ import { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  LineChart, Line, ResponsiveContainer, ReferenceLine, Legend,
+  LineChart, Line, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-/**
- * RLBrainTab — RL Policy Visualization
- * =====================================
- * - Action gauge (rl_action ∈ [-1, +1])
- * - Reward curve + entropy
- * - Reward ablation bar chart (KEY showstopper)
- * - Disagreement gate visualization
- * - Active regime + MoE policy
- */
-export default function RLBrainTab({ analysis }) {
-  const [brain, setBrain]       = useState(null);
-  const [ablation, setAblation] = useState(null);
-  const [loading, setLoading]   = useState(false);
-  const [ablLoading, setAblLoading] = useState(false);
-  const [ticker, setTicker]     = useState('AAPL');
-  const [progress, setProgress] = useState(0);
+const REGIME_CFG = {
+  trending:        { color: '#00e5a0', icon: '📈', label: 'Trending'        },
+  mean_reverting:  { color: '#60a5fa', icon: '↔️', label: 'Mean-Reverting'  },
+  high_volatility: { color: '#ff4f72', icon: '⚡', label: 'High Volatility' },
+};
 
-  // Upload model state
+export default function RLBrainTab({ analysis, onRefreshAnalysis }) {
+  const [brain, setBrain]           = useState(null);
+  const [ablation, setAblation]     = useState(null);
+  const [loading, setLoading]       = useState(false);
+  const [ablLoading, setAblLoading] = useState(false);
+  const [ticker, setTicker]         = useState(analysis?.symbol || 'AAPL');
+  const [progress, setProgress]     = useState(0);
   const [uploadFile, setUploadFile]     = useState(null);
-  const [uploadStatus, setUploadStatus] = useState(null); // null | 'uploading' | 'success' | 'error'
+  const [uploadStatus, setUploadStatus] = useState(null);
   const [uploadMsg, setUploadMsg]       = useState('');
   const [modelInfo, setModelInfo]       = useState(null);
 
-  // Fetch model info on mount
+  useEffect(() => {
+    if (analysis?.symbol) setTicker(analysis.symbol);
+  }, [analysis?.symbol]);
+
   useEffect(() => {
     axios.get(`${API}/rl/model-info`, { params: { symbol: ticker } })
-      .then(({ data }) => setModelInfo(data))
-      .catch(() => {});
+      .then(({ data }) => setModelInfo(data)).catch(() => {});
   }, [ticker]);
 
-  // Poll brain when training is active
   useEffect(() => {
-    let intervalId;
+    let id;
     if (brain?.training_active) {
-      intervalId = setInterval(() => {
+      id = setInterval(() => {
         setProgress(p => Math.min(p + (Math.random() * 5 + 1), 95));
         axios.get(`${API}/rl/brain`, { params: { symbol: ticker } })
-          .then(({ data }) => {
-            setBrain(data);
-            if (!data.training_active) setProgress(100);
-          }).catch(err => console.error(err));
+          .then(({ data }) => { setBrain(data); if (!data.training_active) setProgress(100); })
+          .catch(() => {});
       }, 3000);
-    } else {
-      if (progress >= 95) setProgress(100);
-    }
-    return () => clearInterval(intervalId);
+    } else if (progress >= 95) setProgress(100);
+    return () => clearInterval(id);
   }, [brain?.training_active, ticker]);
 
   const fetchBrain = useCallback(async () => {
@@ -60,11 +52,8 @@ export default function RLBrainTab({ analysis }) {
     try {
       const { data } = await axios.get(`${API}/rl/brain`, { timeout: 30_000 });
       setBrain(data);
-    } catch (e) {
-      console.error('RL Brain fetch failed:', e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { console.error('RL Brain fetch failed:', e.message); }
+    finally { setLoading(false); }
   }, []);
 
   const fetchAblation = useCallback(async () => {
@@ -72,11 +61,8 @@ export default function RLBrainTab({ analysis }) {
     try {
       const { data } = await axios.post(`${API}/rl/ablation`, { symbol: ticker, timeframe: '1d', period: '2y' }, { timeout: 120_000 });
       setAblation(data);
-    } catch (e) {
-      console.error('Ablation fetch failed:', e.message);
-    } finally {
-      setAblLoading(false);
-    }
+    } catch (e) { console.error('Ablation failed:', e.message); }
+    finally { setAblLoading(false); }
   }, [ticker]);
 
   const handleTrain = async () => {
@@ -85,30 +71,23 @@ export default function RLBrainTab({ analysis }) {
       await axios.post(`${API}/rl/train?symbol=${analysis?.symbol || ticker}&timeframe=1d`);
       setBrain(prev => ({ ...(prev || {}), training_active: true }));
       setProgress(0);
-    } catch (e) {
-      console.error('Training failed:', e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { console.error('Training failed:', e.message); }
+    finally { setLoading(false); }
   };
 
-  const handleUploadModel = async () => {
+  const handleUpload = async () => {
     if (!uploadFile) return;
-    setUploadStatus('uploading');
-    setUploadMsg('');
+    setUploadStatus('uploading'); setUploadMsg('');
     try {
       const form = new FormData();
       form.append('file', uploadFile);
-      const { data } = await axios.post(
-        `${API}/rl/upload-model?symbol=${ticker}&timeframe=1d`,
-        form,
-        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60_000 }
-      );
-      // model_ok = live verification passed; 'saved' = on disk, needs restart
+      const { data } = await axios.post(`${API}/rl/upload-model?symbol=${ticker}&timeframe=1d`, form,
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60_000 });
       setUploadStatus(data.model_ok ? 'success' : 'saved');
       setUploadMsg(data.message || 'Model uploaded');
       setModelInfo({ exists: true, symbol: ticker, size_kb: data.size_kb, modified_at: new Date().toISOString() });
       setUploadFile(null);
+      if (onRefreshAnalysis) onRefreshAnalysis();
     } catch (e) {
       setUploadStatus('error');
       setUploadMsg(e.response?.data?.detail || e.message || 'Upload failed');
@@ -116,137 +95,144 @@ export default function RLBrainTab({ analysis }) {
   };
 
   const rl      = analysis?.rl_weights || {};
-  const action  = rl.effective_action ?? 0;
+  const action  = rl.rl_action         ?? 0;
   const posSize = rl.effective_position ?? 0;
   const disagr  = rl.disagreement_score ?? 0;
-  const gate    = rl.gate_value ?? 1;
-  const regime  = rl.active_regime ?? '—';
-  const actionThreshold = 0.02;
+  const gate    = rl.gate_value         ?? 1;
+  const regime  = rl.active_regime      ?? 'trending';
+  const regCfg  = REGIME_CFG[regime]    || { color: '#94a3b8', icon: '?', label: regime };
 
-  // Gauge needle position: action ∈ [-1, +1] → rotate from -90° to +90°
-  const needleDeg = action * 90;
+  const dirColor = rl.direction === 'BUY'  ? '#00e5a0'
+                 : rl.direction === 'SELL' ? '#ff4f72'
+                 : '#ffb830';
 
-  // Ablation chart data
-  const ablationData = ablation ? Object.entries(ablation.variants || {}).map(([name, v]) => ({
-    name: name.replace('_', ' ').replace(/^\w/, c => c.toUpperCase()),
-    sharpe: v.sharpe,
-    total: v.total_reward,
-  })) : [];
-
-  // Reward curve data
-  const rewardData  = (brain?.reward_history  || []).map((v, i) => ({ step: i, reward: v }));
-  const entropyData = (brain?.entropy_history || []).map((v, i) => ({ step: i, entropy: v }));
+  const needleDeg  = action * 90;
+  const rewardData = (brain?.reward_history  || []).map((v, i) => ({ step: i, reward: v }));
+  const ablData    = ablation
+    ? Object.entries(ablation.variants || {}).map(([name, v]) => ({
+        name: name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        sharpe: v.sharpe,
+      }))
+    : [];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Training Progress Banner */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+      {/* Training progress */}
       {brain?.training_active && (
-        <div style={{ background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.4)', borderRadius: 8, padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ color: '#c3dafe', fontSize: 13, fontWeight: 600 }}>⚡ Reinforcement Learning in Progress</span>
-            <span style={{ color: '#818cf8', fontSize: 13, fontFamily: 'monospace' }}>{progress.toFixed(0)}%</span>
+        <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 14, padding: '20px 24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+            <span style={{ color: '#a5b4fc', fontSize: 14, fontWeight: 700 }}>⚡ Reinforcement Learning Training in Progress</span>
+            <span style={{ color: '#818cf8', fontSize: 14, fontFamily: 'var(--mono)', fontWeight: 800 }}>{progress.toFixed(0)}%</span>
           </div>
-          <div style={{ background: 'rgba(255,255,255,0.05)', height: 6, borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ background: '#818cf8', height: '100%', width: `${progress}%`, transition: 'width 0.5s ease-out' }} />
+          <div style={{ background: 'rgba(255,255,255,0.05)', height: 8, borderRadius: 4, overflow: 'hidden', marginBottom: 10 }}>
+            <div style={{ background: 'linear-gradient(90deg, #6366f1, #a78bfa)', height: '100%', width: `${progress}%`, transition: 'width 0.5s ease', borderRadius: 4 }} />
           </div>
-          <div style={{ fontSize: 11, color: '#a0aec0', marginTop: 8 }}>
+          <div style={{ fontSize: 12, color: '#64748b' }}>
             Executing multi-phase curriculum (Trending → Mean-Reverting → High-Vol). Lagrangian constraints actively tightening.
           </div>
         </div>
       )}
 
+      {/* ── Row 1: Action Gauge | Gate | Regime ─────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
 
-      {/* Action Gauge + Regime */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-        {/* Gauge */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">⚡ RL Action</span></div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0' }}>
-            <div style={{ position: 'relative', width: 140, height: 80 }}>
-              <svg viewBox="0 0 140 80" width="140" height="80">
-                {/* Arc background */}
-                <path d="M 10 70 A 60 60 0 0 1 130 70" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="12" strokeLinecap="round" />
-                {/* Negative zone */}
-                <path d="M 10 70 A 60 60 0 0 1 70 10" fill="none" stroke="rgba(252,129,129,0.3)" strokeWidth="12" strokeLinecap="round" />
-                {/* Positive zone */}
-                <path d="M 70 10 A 60 60 0 0 1 130 70" fill="none" stroke="rgba(104,211,145,0.3)" strokeWidth="12" strokeLinecap="round" />
-                {/* Needle */}
-                <line
-                  x1="70" y1="70"
-                  x2={70 + 50 * Math.cos((needleDeg - 90) * Math.PI / 180)}
-                  y2={70 + 50 * Math.sin((needleDeg - 90) * Math.PI / 180)}
-                  stroke={action > actionThreshold ? '#68d391' : action < -actionThreshold ? '#fc8181' : '#f6e05e'}
-                  strokeWidth="3" strokeLinecap="round"
-                  style={{ transition: 'all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)' }}
-                />
-                <circle cx="70" cy="70" r="5" fill="#fff" />
-              </svg>
-            </div>
-            <div style={{ fontSize: 28, fontWeight: 800, fontFamily: 'monospace',
-                          color: action > actionThreshold ? '#68d391' : action < -actionThreshold ? '#fc8181' : '#f6e05e' }}>
-              {action.toFixed(4)}
-            </div>
-            <div style={{ fontSize: 12, color: '#8b9fc0', marginTop: 4 }}>
-              {rl.direction || 'FLAT'} · {(posSize * 100).toFixed(2)}% position
-            </div>
+        {/* Action Gauge */}
+        <div className="card" style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 16 }}>RL ACTION OUTPUT</div>
+          <div style={{ position: 'relative', width: 150, height: 90, margin: '0 auto 12px' }}>
+            <svg viewBox="0 0 150 90" width="150" height="90">
+              <path d="M 15 75 A 60 60 0 0 1 135 75" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="14" strokeLinecap="round" />
+              <path d="M 15 75 A 60 60 0 0 1 75 15" fill="none" stroke="rgba(255,79,114,0.25)" strokeWidth="14" strokeLinecap="round" />
+              <path d="M 75 15 A 60 60 0 0 1 135 75" fill="none" stroke="rgba(0,229,160,0.25)" strokeWidth="14" strokeLinecap="round" />
+              <line
+                x1="75" y1="75"
+                x2={75 + 52 * Math.cos((needleDeg - 90) * Math.PI / 180)}
+                y2={75 + 52 * Math.sin((needleDeg - 90) * Math.PI / 180)}
+                stroke={dirColor}
+                strokeWidth="3.5" strokeLinecap="round"
+                style={{ transition: 'all 0.6s cubic-bezier(0.34,1.56,0.64,1)', filter: `drop-shadow(0 0 4px ${dirColor})` }}
+              />
+              <circle cx="75" cy="75" r="6" fill={dirColor} style={{ filter: `drop-shadow(0 0 6px ${dirColor})` }} />
+            </svg>
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 900, fontFamily: 'var(--mono)', color: dirColor, letterSpacing: -1, filter: `drop-shadow(0 0 8px ${dirColor})` }}>
+            {action.toFixed(4)}
+          </div>
+          <div style={{ fontSize: 13, color: '#64748b', marginTop: 6 }}>Raw RL Action</div>
+          <div style={{ marginTop: 12, padding: '8px 16px', background: `${dirColor}18`, border: `1px solid ${dirColor}40`, borderRadius: 20, display: 'inline-block' }}>
+            <span style={{ color: dirColor, fontWeight: 800, fontSize: 14 }}>{rl.direction || 'FLAT'}</span>
+            <span style={{ color: '#64748b', fontSize: 12, marginLeft: 8 }}>{(posSize * 100).toFixed(2)}% position</span>
           </div>
         </div>
 
         {/* Disagreement Gate */}
         <div className="card">
-          <div className="card-header"><span className="card-title">🔒 Disagreement Gate</span></div>
-          <div style={{ padding: '12px 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#c3dafe', textAlign: 'center', padding: '6px 8px',
-                          background: 'rgba(99,102,241,0.1)', borderRadius: 6 }}>
-              eff_action = {rl.rl_action?.toFixed(3) ?? '?'} × {gate.toFixed(3)}
+          <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 16 }}>DISAGREEMENT GATE</div>
+          <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: '12px 14px', marginBottom: 16, textAlign: 'center' }}>
+            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4, fontFamily: 'var(--mono)' }}>FORMULA</div>
+            <div style={{ fontSize: 14, color: '#a5b4fc', fontFamily: 'var(--mono)', fontWeight: 700 }}>
+              eff = {rl.rl_action?.toFixed(3) ?? '?'} × {gate.toFixed(3)}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {[
-                { label: 'Disagreement Score', value: disagr, max: 1, color: '#fc8181' },
-                { label: 'Gate Value (1-α·d)',  value: gate,   max: 1, color: '#68d391' },
-                { label: 'Position Size',        value: posSize, max: 1, color: '#63b3ed' },
-              ].map(({ label, value, max, color }) => (
-                <div key={label}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#8b9fc0', marginBottom: 3 }}>
-                    <span>{label}</span>
-                    <span style={{ color, fontFamily: 'monospace' }}>{(value * 100).toFixed(1)}%</span>
-                  </div>
-                  <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.05)' }}>
-                    <div style={{ width: `${Math.abs(value / max) * 100}%`, height: '100%',
-                                  borderRadius: 3, background: color, transition: 'width 0.5s ease' }} />
-                  </div>
-                </div>
-              ))}
-            </div>
+            <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>rl_action × gate_value</div>
           </div>
+          {[
+            { label: 'Disagreement Score', value: disagr,  color: '#ff4f72', desc: 'Higher = agents disagree more' },
+            { label: 'Gate Value',         value: gate,    color: '#00e5a0', desc: 'Multiplier applied to action' },
+            { label: 'Final Position %',   value: posSize, color: '#60a5fa', desc: 'Of total portfolio'           },
+          ].map(({ label, value, color, desc }) => (
+            <div key={label} style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}>
+                <div>
+                  <span style={{ color: '#94a3b8', fontWeight: 600 }}>{label}</span>
+                  <div style={{ fontSize: 10, color: '#475569' }}>{desc}</div>
+                </div>
+                <span style={{ color, fontFamily: 'var(--mono)', fontWeight: 800, fontSize: 15 }}>
+                  {(value * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, Math.abs(value) * 100)}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.6s ease' }} />
+              </div>
+            </div>
+          ))}
         </div>
 
-        {/* Active Regime Policy */}
+        {/* Active Regime */}
         <div className="card">
-          <div className="card-header"><span className="card-title">🌐 Active Regime</span></div>
-          <div style={{ padding: '12px 0', display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
-            {['trending', 'mean_reverting', 'high_volatility'].map(r => {
-              const active = regime === r;
-              const colors = { trending: '#68d391', mean_reverting: '#63b3ed', high_volatility: '#fc8181' };
+          <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 16 }}>ACTIVE REGIME POLICY</div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>CURRENT POLICY</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${regCfg.color}14`, border: `1px solid ${regCfg.color}40`, borderRadius: 12 }}>
+              <span style={{ fontSize: 24 }}>{regCfg.icon}</span>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: regCfg.color }}>{regCfg.label.toUpperCase()}</div>
+                <div style={{ fontSize: 12, color: '#64748b' }}>RL sub-policy active</div>
+              </div>
+              <span style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontWeight: 800, fontSize: 18, color: regCfg.color }}>
+                {((rl.regime_confidence || 0) * 100).toFixed(0)}%
+              </span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {Object.entries(REGIME_CFG).map(([key, cfg]) => {
+              const active = regime === key;
               return (
-                <div key={r} style={{
-                  width: '90%', padding: '8px 14px', borderRadius: 8,
-                  background: active ? `${colors[r]}22` : 'rgba(255,255,255,0.02)',
-                  border: active ? `1.5px solid ${colors[r]}55` : '1px solid transparent',
-                  transition: 'all 0.3s ease',
+                <div key={key} style={{
+                  padding: '10px 14px', borderRadius: 10,
+                  background: active ? `${cfg.color}10` : 'rgba(255,255,255,0.02)',
+                  border: active ? `1px solid ${cfg.color}40` : '1px solid rgba(255,255,255,0.04)',
+                  display: 'flex', alignItems: 'center', gap: 10,
                 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 12, color: active ? colors[r] : '#647091',
-                                   fontWeight: active ? 700 : 400, textTransform: 'capitalize' }}>
-                      {active && '▶ '}{r.replace('_', ' ')}
+                  <span style={{ fontSize: 16 }}>{cfg.icon}</span>
+                  <span style={{ fontSize: 13, color: active ? cfg.color : '#475569', fontWeight: active ? 700 : 400 }}>
+                    {cfg.label}
+                  </span>
+                  {active && (
+                    <span style={{ marginLeft: 'auto', fontSize: 11, background: `${cfg.color}22`, color: cfg.color, padding: '2px 8px', borderRadius: 20, fontWeight: 700 }}>
+                      ACTIVE
                     </span>
-                    {active && (
-                      <span style={{ fontSize: 11, color: colors[r],
-                                     background: `${colors[r]}22`, padding: '1px 8px', borderRadius: 10 }}>
-                        {(rl.regime_confidence * 100 || 0).toFixed(0)}%
-                      </span>
-                    )}
-                  </div>
+                  )}
                 </div>
               );
             })}
@@ -254,201 +240,202 @@ export default function RLBrainTab({ analysis }) {
         </div>
       </div>
 
-      {/* Reward Curve */}
+      {/* ── Reward Curve ────────────────────────────────────────── */}
       <div className="card">
-        <div className="card-header">
-          <span className="card-title">📈 Reward Curve</span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-backtest" style={{ fontSize: 11, padding: '4px 12px' }}
-                    onClick={handleTrain} disabled={loading}>
-              {loading ? 'Starting…' : '⚡ Train RL Brain'}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>📈 TRAINING REWARD CURVE</div>
+            <div style={{ fontSize: 13, color: '#94a3b8' }}>Cumulative reward per training step — should trend upward over time</div>
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={fetchBrain} disabled={loading} style={{
+              padding: '8px 18px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)', color: '#94a3b8', fontSize: 13, cursor: 'pointer',
+              fontWeight: 600,
+            }}>
+              {loading ? '⏳ Loading…' : '↻ Refresh'}
             </button>
-            <button className="btn-analyze" style={{ fontSize: 11, padding: '4px 12px' }}
-                    onClick={fetchBrain} disabled={loading}>
-              {loading ? 'Loading…' : '↻ Refresh'}
+            <button onClick={handleTrain} disabled={loading} style={{
+              padding: '8px 18px', borderRadius: 8, border: 'none',
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', fontSize: 13,
+              cursor: 'pointer', fontWeight: 700,
+            }}>
+              {loading ? '⏳ Starting…' : '⚡ Train RL Brain'}
             </button>
           </div>
         </div>
-        {brain ? (
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={rewardData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="step" tick={{ fill: '#647091', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#647091', fontSize: 10 }} />
-              <Tooltip contentStyle={{ background: 'rgba(26,27,58,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }} />
-              <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-              <Line type="monotone" dataKey="reward" stroke="#68d391" dot={false}
-                    strokeWidth={2} name="Reward" />
+        {rewardData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={rewardData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+              <XAxis dataKey="step" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
+              <Tooltip
+                contentStyle={{ background: '#1a2035', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, fontSize: 13 }}
+                labelStyle={{ color: '#94a3b8' }}
+              />
+              <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
+              <Line type="monotone" dataKey="reward" stroke="#00e5a0" dot={false} strokeWidth={2.5} name="Reward" />
             </LineChart>
           </ResponsiveContainer>
         ) : (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: '#647091', fontSize: 13 }}>
-            Click Refresh to load reward history
+          <div style={{ textAlign: 'center', padding: '48px 0', color: '#475569' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
+            <div style={{ fontSize: 14 }}>Click Refresh to load reward history</div>
+            <div style={{ fontSize: 12, marginTop: 6, color: '#374151' }}>No training data loaded yet</div>
           </div>
         )}
       </div>
 
-      {/* Reward Ablation — KEY SHOWSTOPPER */}
+      {/* ── Feature Ablation ─────────────────────────────────────── */}
       <div className="card">
-        <div className="card-header">
-          <span className="card-title">🧪 Reward Ablation Study</span>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
-                   style={{ width: 70, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: 6, padding: '3px 8px', color: '#fff', fontSize: 12 }} />
-            <button className="btn-backtest" style={{ fontSize: 11, padding: '4px 14px' }}
-                    onClick={fetchAblation} disabled={ablLoading}>
-              {ablLoading ? 'Running…' : '▶ Run Ablation'}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 4 }}>🧪 REWARD ABLATION STUDY</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', maxWidth: 480 }}>
+              Each bar removes one penalty term from the reward function. A drop in Sharpe confirms that component is essential to profitability.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+            <input
+              value={ticker}
+              onChange={e => setTicker(e.target.value.toUpperCase())}
+              style={{
+                width: 80, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 8, padding: '8px 12px', color: '#fff', fontSize: 13,
+              }}
+            />
+            <button onClick={fetchAblation} disabled={ablLoading} style={{
+              padding: '8px 18px', borderRadius: 8, border: 'none',
+              background: ablLoading ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #f59e0b, #d97706)',
+              color: ablLoading ? '#64748b' : '#000', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+            }}>
+              {ablLoading ? '⏳ Running…' : '▶ Run Ablation'}
             </button>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: '#647091', marginBottom: 12 }}>
-          Remove each penalty term from the reward function and compare resulting Sharpe ratios.
-          A drop in Sharpe confirms each component is essential.
-        </div>
-        {ablationData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={ablationData} margin={{ top: 8, bottom: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="name" tick={{ fill: '#a0aec0', fontSize: 11 }} />
-              <YAxis tick={{ fill: '#647091', fontSize: 10 }} />
+        {ablData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={ablData} margin={{ top: 8, right: 16, left: 0, bottom: 20 }}>
+              <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+              <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
               <Tooltip
-                contentStyle={{ background: 'rgba(26,27,58,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
-                formatter={(v) => [v.toFixed(4), 'Sharpe']}
+                contentStyle={{ background: '#1a2035', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10 }}
+                formatter={v => [v?.toFixed(4), 'Sharpe Ratio']}
               />
-              <Bar dataKey="sharpe" name="Sharpe"
-                   fill="#6366f1"
-                   radius={[4,4,0,0]}
-                   label={{ position: 'top', fill: '#a0aec0', fontSize: 10,
-                            formatter: v => v?.toFixed(3) }} />
+              <Bar dataKey="sharpe" name="Sharpe" fill="#6366f1" radius={[6, 6, 0, 0]}
+                label={{ position: 'top', fill: '#94a3b8', fontSize: 11, formatter: v => v?.toFixed(3) }} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: '#647091', fontSize: 13 }}>
-            Run ablation to see how each penalty term affects strategy performance
+          <div style={{ textAlign: 'center', padding: '48px 0', color: '#475569' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>🧪</div>
+            <div style={{ fontSize: 14 }}>Run ablation to analyze reward component importance</div>
+            <div style={{ fontSize: 12, marginTop: 6, color: '#374151' }}>Estimated runtime: ~2–5 minutes</div>
           </div>
         )}
       </div>
 
-      {/* ═══ Train on Google Colab ═══ */}
+      {/* ── Colab Training ───────────────────────────────────────── */}
       <div className="card">
-        <div className="card-header">
-          <span className="card-title">🚀 Train on Google Colab (GPU)</span>
-        </div>
-        <div style={{ fontSize: 12, color: '#a0aec0', marginBottom: 16, lineHeight: 1.6 }}>
-          Train the RL model on a free GPU in ~30 min instead of 3-5 hours locally.
-          <strong style={{ color: '#f6e05e' }}> 3 easy steps:</strong>
-        </div>
+        <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, letterSpacing: 1.5, marginBottom: 20 }}>🚀 TRAIN ON GOOGLE COLAB (FREE GPU)</div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 24 }}>
           {[
-            { step: '1', title: 'Open Colab', desc: 'Click the button below to open the training notebook', icon: '📓' },
-            { step: '2', title: 'Run All Cells', desc: 'Select Runtime → Run All. Wait ~30 min on T4 GPU', icon: '⚡' },
-            { step: '3', title: 'Upload Model', desc: 'Download the .zip file and upload it here', icon: '📤' },
+            { step: '1', title: 'Open Notebook', desc: 'Click the Colab button below to open the GPU training notebook.', icon: '📓', color: '#f59e0b' },
+            { step: '2', title: 'Run All Cells',  desc: 'Select Runtime → Run All. Completes in ~30 min on a T4 GPU.',      icon: '⚡', color: '#6366f1' },
+            { step: '3', title: 'Upload Model',  desc: 'Download the .zip output and upload it in the panel below.',         icon: '📤', color: '#00e5a0' },
           ].map(s => (
-            <div key={s.step} style={{
-              background: 'rgba(99,102,241,0.06)', borderRadius: 10, padding: 14,
-              border: '1px solid rgba(99,102,241,0.15)', textAlign: 'center'
-            }}>
-              <div style={{ fontSize: 24, marginBottom: 6 }}>{s.icon}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#c3dafe', marginBottom: 4 }}>Step {s.step}: {s.title}</div>
-              <div style={{ fontSize: 11, color: '#8b9fc0', lineHeight: 1.4 }}>{s.desc}</div>
+            <div key={s.step} style={{ background: `${s.color}08`, borderRadius: 12, padding: '18px 16px', border: `1px solid ${s.color}25`, textAlign: 'center' }}>
+              <div style={{ fontSize: 28, marginBottom: 10 }}>{s.icon}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: s.color, marginBottom: 6 }}>Step {s.step}: {s.title}</div>
+              <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>{s.desc}</div>
             </div>
           ))}
         </div>
 
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Open Colab button */}
+        {/* Actions row */}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
           <a
             href="https://colab.research.google.com/github/Anuja0412Gupta/Quant_Agent/blob/main/colab_train.ipynb"
             target="_blank" rel="noopener noreferrer"
             style={{
               background: 'linear-gradient(135deg, #f9ab00, #ea8600)', color: '#000',
-              padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 700,
-              textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6,
-              transition: 'transform 0.2s, box-shadow 0.2s',
+              padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 800,
+              textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8,
             }}
-            onMouseEnter={e => { e.target.style.transform = 'scale(1.03)'; e.target.style.boxShadow = '0 4px 20px rgba(249,171,0,0.3)'; }}
-            onMouseLeave={e => { e.target.style.transform = 'scale(1)'; e.target.style.boxShadow = 'none'; }}
           >
             <img src="https://colab.research.google.com/img/colab_favicon_256px.png" width="18" height="18" alt="" style={{ borderRadius: 3 }} />
             Open Colab Notebook
           </a>
 
-          {/* Divider */}
-          <div style={{ width: 1, height: 32, background: 'rgba(255,255,255,0.1)' }} />
+          <div style={{ width: 1, height: 32, background: 'rgba(255,255,255,0.08)' }} />
 
-          {/* File picker */}
           <label style={{
-            cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px dashed rgba(255,255,255,0.2)',
-            borderRadius: 8, padding: '8px 16px', fontSize: 12, color: '#a0aec0',
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            transition: 'border-color 0.2s',
+            cursor: 'pointer', background: 'rgba(255,255,255,0.04)', border: '1px dashed rgba(255,255,255,0.15)',
+            borderRadius: 10, padding: '10px 18px', fontSize: 13, color: uploadFile ? '#f1f5f9' : '#64748b',
+            display: 'inline-flex', alignItems: 'center', gap: 8,
           }}>
             📁 {uploadFile ? uploadFile.name : 'Choose .zip model file'}
             <input type="file" accept=".zip" style={{ display: 'none' }}
               onChange={e => { setUploadFile(e.target.files[0] || null); setUploadStatus(null); }} />
           </label>
 
-          {/* Upload button */}
           <button
-            onClick={handleUploadModel}
+            onClick={handleUpload}
             disabled={!uploadFile || uploadStatus === 'uploading'}
             style={{
-              background: uploadFile ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(255,255,255,0.05)',
-              color: uploadFile ? '#fff' : '#647091', border: 'none', borderRadius: 8,
-              padding: '8px 18px', fontSize: 12, fontWeight: 600, cursor: uploadFile ? 'pointer' : 'not-allowed',
-              transition: 'all 0.2s',
+              background: uploadFile ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(255,255,255,0.04)',
+              color: uploadFile ? '#fff' : '#475569', border: 'none', borderRadius: 10,
+              padding: '10px 20px', fontSize: 13, fontWeight: 700,
+              cursor: uploadFile ? 'pointer' : 'not-allowed',
             }}
           >
             {uploadStatus === 'uploading' ? '⏳ Uploading…' : '📤 Upload Model'}
           </button>
         </div>
 
-        {/* Upload feedback — 4 states: uploading / success / saved / error */}
+        {/* Upload status */}
         {uploadStatus && (
           <div style={{
-            marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 12,
+            padding: '14px 18px', borderRadius: 10, fontSize: 13,
             background:
-              uploadStatus === 'success'  ? 'rgba(104,211,145,0.1)' :
-              uploadStatus === 'saved'    ? 'rgba(246,224,94,0.08)' :
-              uploadStatus === 'error'    ? 'rgba(252,129,129,0.1)' :
-                                           'rgba(99,102,241,0.1)',
+              uploadStatus === 'success' ? 'rgba(0,229,160,0.08)' :
+              uploadStatus === 'saved'   ? 'rgba(255,184,48,0.08)' :
+              uploadStatus === 'error'   ? 'rgba(255,79,114,0.08)' :
+                                          'rgba(99,102,241,0.08)',
             border: `1px solid ${
-              uploadStatus === 'success'  ? 'rgba(104,211,145,0.3)' :
-              uploadStatus === 'saved'    ? 'rgba(246,224,94,0.3)'  :
-              uploadStatus === 'error'    ? 'rgba(252,129,129,0.3)' :
-                                           'rgba(99,102,241,0.3)'}`,
+              uploadStatus === 'success' ? 'rgba(0,229,160,0.3)' :
+              uploadStatus === 'saved'   ? 'rgba(255,184,48,0.3)'  :
+              uploadStatus === 'error'   ? 'rgba(255,79,114,0.3)'  :
+                                          'rgba(99,102,241,0.3)'}`,
             color:
-              uploadStatus === 'success'  ? '#68d391' :
-              uploadStatus === 'saved'    ? '#f6e05e' :
-              uploadStatus === 'error'    ? '#fc8181' :
-                                           '#818cf8',
+              uploadStatus === 'success' ? '#00e5a0' :
+              uploadStatus === 'saved'   ? '#ffb830' :
+              uploadStatus === 'error'   ? '#ff4f72' :
+                                          '#818cf8',
           }}>
-            <div style={{ fontWeight: 600, marginBottom: uploadStatus === 'saved' ? 4 : 0 }}>
-              {uploadStatus === 'success'  ? '✅' :
-               uploadStatus === 'saved'    ? '⚠️' :
-               uploadStatus === 'error'    ? '❌' : '⏳'} {uploadMsg}
+            <div style={{ fontWeight: 700, marginBottom: uploadStatus === 'saved' ? 6 : 0 }}>
+              {uploadStatus === 'success' ? '✅' : uploadStatus === 'saved' ? '⚠️' : uploadStatus === 'error' ? '❌' : '⏳'} {uploadMsg}
             </div>
             {uploadStatus === 'saved' && (
-              <div style={{ fontSize: 11, opacity: 0.8, marginTop: 4 }}>
-                📌 Model is saved to disk. <strong>Restart your backend</strong> (Ctrl+C → python main.py) to activate it for backtest & analysis.
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                📌 Model saved to disk. <strong>Restart backend</strong> (Ctrl+C → python main.py) to activate it.
               </div>
             )}
           </div>
         )}
 
-        {/* Current model info */}
+        {/* Model info */}
         {modelInfo?.exists && (
-          <div style={{ marginTop: 12, padding: '8px 14px', borderRadius: 8, background: 'rgba(255,255,255,0.03)',
-                        fontSize: 11, color: '#8b9fc0', display: 'flex', gap: 16 }}>
-            <span>📦 Current Model: <strong style={{ color: '#c3dafe' }}>{modelInfo.symbol}</strong></span>
-            <span>Size: <strong>{modelInfo.size_kb} KB</strong></span>
-            <span>Updated: <strong>{new Date(modelInfo.modified_at).toLocaleString()}</strong></span>
+          <div style={{ marginTop: 14, padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: 10, fontSize: 12, color: '#64748b', display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+            <span>📦 <strong style={{ color: '#94a3b8' }}>Loaded Model:</strong> {modelInfo.symbol}</span>
+            <span>📏 <strong>Size:</strong> {modelInfo.size_kb} KB</span>
+            <span>🕒 <strong>Updated:</strong> {new Date(modelInfo.modified_at).toLocaleString()}</span>
           </div>
         )}
       </div>
     </div>
   );
 }
-

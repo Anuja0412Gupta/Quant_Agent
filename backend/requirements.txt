@@ -7,6 +7,7 @@ uvicorn[standard]>=0.29.0
 pydantic>=2.0.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
+motor>=3.3.0
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 yfinance>=0.2.38
@@ -31,7 +32,9 @@ statsmodels>=0.14.0
 scikit-learn>=1.4.0
 
 # ── RL + Deep Learning ────────────────────────────────────────────────────────
-torch>=2.3.0
+# CPU-only build — ~180 MB instead of ~2 GB CUDA build (safe for Render free tier)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.0+cpu
 stable-baselines3>=2.8.0
 sb3-contrib>=2.8.0
 gymnasium>=0.29.0
@@ -40,7 +43,7 @@ gymnasium>=0.29.0
 xgboost>=2.0.0
 
 # ── Optimization ─────────────────────────────────────────────────────────────
-scipy>=1.13.0   # duplicate OK — for portfolio CVaR optimization
+# (scipy already listed above)
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 joblib>=1.4.0
