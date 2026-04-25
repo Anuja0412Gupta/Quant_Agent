@@ -74,12 +74,8 @@ except ImportError:
     _NEWS_OK = False
     logger.warning("newsapi-python not installed — news sentiment unavailable")
 
-try:
-    import praw
-    _PRAW_OK = True
-except ImportError:
-    _PRAW_OK = False
-    logger.warning("praw not installed — Reddit sentiment unavailable")
+# Reddit / PRAW intentionally disabled — credentials not required
+_PRAW_OK = False
 
 try:
     from cachetools import TTLCache
@@ -90,7 +86,7 @@ except ImportError:
     logger.warning("cachetools not installed — falling back to simple cache")
 
 from config import (
-    FRED_API_KEY, NEWS_API_KEY, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET,
+    FRED_API_KEY, NEWS_API_KEY,
     SENTIMENT_HALF_LIVES, FINBERT_CACHE_DIR, YFINANCE_TZ_CACHE_DIR,
 )
 from shared_types import (
@@ -473,20 +469,8 @@ class DataFetcher:
             except Exception as e:
                 logger.warning("NewsAPI init failed: %s", e)
 
-        # Reddit PRAW (read-only, no auth required for public posts)
-        if _PRAW_OK:
-            try:
-                client_id = REDDIT_CLIENT_ID or "QuantAgentReadOnly"
-                client_secret = REDDIT_CLIENT_SECRET or "x" * 20
-                self._reddit = praw.Reddit(
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    user_agent="QuantAgent:v3.0 (by /u/quantagent)",
-                    read_only=True,
-                )
-                logger.info("Reddit PRAW client initialized (read-only)")
-            except Exception as e:
-                logger.warning("PRAW init failed: %s", e)
+        # Reddit disabled — always returns neutral
+        pass
 
     @staticmethod
     def _normalize_ticker(ticker: str) -> str:

@@ -122,8 +122,9 @@ PAPER_PORTFOLIO_PATH    = os.environ.get("PAPER_PORTFOLIO_PATH",
 # ── External API Keys (loaded from .env) ──────────────────────────────────────
 FRED_API_KEY            = os.environ.get("FRED_API_KEY", "")
 NEWS_API_KEY            = os.environ.get("NEWS_API_KEY", "")
-REDDIT_CLIENT_ID        = os.environ.get("REDDIT_CLIENT_ID", "")
-REDDIT_CLIENT_SECRET    = os.environ.get("REDDIT_CLIENT_SECRET", "")
+REDDIT_CLIENT_ID        = ""   # disabled — no credentials needed
+REDDIT_CLIENT_SECRET    = ""   # disabled
+
 
 # ── Database ──────────────────────────────────────────────────────────────────
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb+srv://smartqueue_admin:%40Ashok123@cluster0.ayenjp1.mongodb.net/smart_queue?retryWrites=true&w=majority&appName=Cluster0")
